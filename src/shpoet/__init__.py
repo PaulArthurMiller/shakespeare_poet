@@ -1,0 +1,1 @@
+"""Shakespearean Poet package root."""
