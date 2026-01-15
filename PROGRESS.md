@@ -30,3 +30,13 @@
   - Begin expander planning scaffolding once contracts exist.
 - Risks/notes:
   - Dependency install is required before running tests (`pip install -e .`).
+
+## 2026-01-15 16:53 — Milestone 1 contracts + signatures
+- Added shared typed contracts for planning, guidance, and scoring.
+- Added deterministic signature helpers and domain error classes.
+- Added unit tests to confirm signature stability.
+- Next steps:
+  - Implement expander planning artifacts and anchor planner for Milestone 2.
+  - Add validators and demo planning script.
+- Risks/notes:
+  - Signature payloads may need expansion as state shape evolves.
