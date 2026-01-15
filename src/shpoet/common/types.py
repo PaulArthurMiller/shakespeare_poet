@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -91,7 +91,7 @@ class PlayPlan(BaseModel):
     title: str = Field(..., description="Play title.")
     acts: List[ActPlan] = Field(default_factory=list)
     anchors: AnchorRegistry = Field(default_factory=AnchorRegistry)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PlayDesignBrief(BaseModel):
@@ -100,7 +100,7 @@ class PlayDesignBrief(BaseModel):
     plan_id: str = Field(..., description="Associated plan identifier.")
     markdown: str = Field(..., description="Rendered brief for user review.")
     anchors: AnchorRegistry = Field(default_factory=AnchorRegistry)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class GuidanceProfile(BaseModel):

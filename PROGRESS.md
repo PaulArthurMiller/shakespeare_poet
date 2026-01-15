@@ -40,3 +40,20 @@
   - Add validators and demo planning script.
 - Risks/notes:
   - Signature payloads may need expansion as state shape evolves.
+
+## 2026-01-15 18:06 — Milestone 2 expander + anchor planner
+- Implemented expander planning pipeline with anchor planning and validations.
+- Added markdown brief renderer, prompt placeholders, and demo plan script.
+- Added expander unit test coverage for anchors and beat obligations.
+- Next steps:
+  - Implement corpus ingestion and chunking for Milestone 3.
+  - Add deterministic tests for line IDs and provenance.
+- Risks/notes:
+  - Anchor selection is heuristic and will evolve once LLM planning is integrated.
+
+## 2026-01-15 18:07 — Fix UTC timestamps in contracts
+- Updated plan/brief timestamps to use timezone-aware UTC datetimes.
+- Next steps:
+  - Proceed to Milestone 3 ingestion and chunking.
+- Risks/notes:
+  - None.
