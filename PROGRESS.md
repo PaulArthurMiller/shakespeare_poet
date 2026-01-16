@@ -67,3 +67,13 @@
   - Add tests for feature derivation and stub embeddings.
 - Risks/notes:
   - Header parsing is heuristic and may need refinement for full corpus imports.
+
+## 2026-01-16 08:15 — Milestone 4 Tier-1 features + vectorstore
+- Added Tier-1 feature extraction for tokens, punctuation, syllables, and rhyme tails.
+- Added deterministic stub embeddings and Chroma build/query utilities.
+- Added build_index script and tests for features and vectorstore queries.
+- Next steps:
+  - Implement macro guidance components for Milestone 5.
+  - Add unit tests for guidance output and anchor obligations.
+- Risks/notes:
+  - Metadata serialization is lossy for nested fields; revisit once schema stabilizes.
