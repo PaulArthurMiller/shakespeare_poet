@@ -57,3 +57,13 @@
   - Proceed to Milestone 3 ingestion and chunking.
 - Risks/notes:
   - None.
+
+## 2026-01-15 19:05 — Milestone 3 ingestion + line chunking
+- Added ingestion pipeline to normalize raw text and build canonical line indices.
+- Added line chunker and corpus store with processed JSONL outputs.
+- Added build_corpus script and tests for stable IDs and provenance.
+- Next steps:
+  - Implement Tier-1 feature extraction and stub vectorstore for Milestone 4.
+  - Add tests for feature derivation and stub embeddings.
+- Risks/notes:
+  - Header parsing is heuristic and may need refinement for full corpus imports.
