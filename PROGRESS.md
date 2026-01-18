@@ -93,3 +93,10 @@
   - Continue Milestone 5 macro guidance implementation.
 - Risks/notes:
   - None.
+
+## 2026-01-18 10:43 — Add Windows-safe vectorstore cleanup retry
+- Updated vectorstore test teardown to retry temp directory cleanup after closing Chroma.
+- Next steps:
+  - Continue Milestone 5 macro guidance implementation.
+- Risks/notes:
+  - None.

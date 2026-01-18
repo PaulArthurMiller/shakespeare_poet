@@ -1,9 +1,11 @@
 """Vector store build and query tests using stub embeddings."""
 
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import mkdtemp
 import gc
 import json
+import shutil
+import time
 
 from shpoet.vectorstore import ChromaStore
 
@@ -46,12 +48,12 @@ def _read_chunks(path: Path) -> list[dict[str, object]]:
 def test_build_and_query_index() -> None:
     """Ensure the vector store can build and return query results."""
 
-    with TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        chunks_path = tmp_path / "line_chunks.jsonl"
+    tmpdir = Path(mkdtemp())
+    try:
+        chunks_path = tmpdir / "line_chunks.jsonl"
         _write_chunks(chunks_path)
 
-        persist_dir = tmp_path / "chroma"
+        persist_dir = tmpdir / "chroma"
         store = ChromaStore(persist_dir)
         count = store.build_index(_read_chunks(chunks_path))
 
@@ -64,3 +66,13 @@ def test_build_and_query_index() -> None:
         # Ensure the SQLite handle releases on Windows before temp cleanup.
         del store
         gc.collect()
+    finally:
+        # Windows can hold file handles briefly; retry cleanup.
+        for attempt in range(10):
+            try:
+                shutil.rmtree(tmpdir)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.1)
