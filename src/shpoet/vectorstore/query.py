@@ -6,9 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import chromadb
-
-from shpoet.vectorstore.embeddings import embed_query
+from shpoet.vectorstore.chroma_store import ChromaStore
 
 
 logger = logging.getLogger(__name__)
@@ -24,14 +22,15 @@ def query_index(
 ) -> Dict[str, Any]:
     """Query the Chroma index for semantically similar chunks."""
 
-    client = chromadb.PersistentClient(path=str(persist_dir))
-    collection = client.get_or_create_collection(collection_name)
+    store = ChromaStore(persist_dir, collection_name=collection_name)
+    try:
+        results = store.query(
+            query_text,
+            n_results=n_results,
+            metadata_filter=metadata_filter,
+            embedding_dimensions=embedding_dimensions,
+        )
+    finally:
+        store.close()
 
-    query_embedding = embed_query(query_text, dimensions=embedding_dimensions)
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results,
-        where=metadata_filter,
-    )
-    logger.info("Query returned %s results", len(results.get("ids", [[]])[0]))
     return results

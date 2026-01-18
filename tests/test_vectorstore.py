@@ -2,10 +2,10 @@
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import gc
 import json
 
-from shpoet.vectorstore.build_index import build_index
-from shpoet.vectorstore.query import query_index
+from shpoet.vectorstore import ChromaStore
 
 
 def _write_chunks(path: Path) -> None:
@@ -37,6 +37,12 @@ def _write_chunks(path: Path) -> None:
     path.write_text("\n".join([json.dumps(chunk) for chunk in chunks]) + "\n", encoding="utf-8")
 
 
+def _read_chunks(path: Path) -> list[dict[str, object]]:
+    """Read chunk dictionaries from a JSONL file."""
+
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def test_build_and_query_index() -> None:
     """Ensure the vector store can build and return query results."""
 
@@ -46,9 +52,15 @@ def test_build_and_query_index() -> None:
         _write_chunks(chunks_path)
 
         persist_dir = tmp_path / "chroma"
-        count = build_index(chunks_path=chunks_path, persist_dir=persist_dir)
+        store = ChromaStore(persist_dir)
+        count = store.build_index(_read_chunks(chunks_path))
 
         assert count == 2
 
-        results = query_index("question", persist_dir=persist_dir, n_results=1)
+        results = store.query("question", n_results=1)
         assert results["ids"][0]
+
+        store.close()
+        # Ensure the SQLite handle releases on Windows before temp cleanup.
+        del store
+        gc.collect()

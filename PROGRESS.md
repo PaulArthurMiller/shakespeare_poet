@@ -77,3 +77,19 @@
   - Add unit tests for guidance output and anchor obligations.
 - Risks/notes:
   - Metadata serialization is lossy for nested fields; revisit once schema stabilizes.
+
+## 2026-01-18 08:01 — ChromaStore lifecycle fix for Windows cleanup
+- Added explicit ChromaStore wrapper and close() to release handles after tests.
+- Updated vectorstore helpers to use explicit store lifecycle.
+- Added cleanup steps in vectorstore tests to avoid Windows file locks.
+- Next steps:
+  - Continue Milestone 5 macro guidance implementation.
+- Risks/notes:
+  - Pytest should be run with the same Python used for dependency installs.
+
+## 2026-01-18 08:02 — Fix JSON import in vectorstore build
+- Restored JSON parsing import for chunk loading in vectorstore build utility.
+- Next steps:
+  - Continue Milestone 5 macro guidance implementation.
+- Risks/notes:
+  - None.
