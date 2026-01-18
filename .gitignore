@@ -6,3 +6,52 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .env
+
+venv/
+
+.log
+*.log
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+# Ignore virtual environment directories
+venv/
+env/
+ENV/
+.venv/
+# Ignore Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# Ignore distribution and packaging files
+dist/
+build/
+*.egg-info/
+# Ignore logs and temporary files
+*.log
+*.bak
+*.tmp
+# Ignore IDE and editor specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*.sln
+*.suo
+*.ncb
+*.sdf
+*.suo
+*.sln
+*.suo
+# Ignore OS generated files
+.DS_Store
+Thumbs.db
+# Ignore coverage reports
+.coverage
+htmlcov/
+.coverage.*
+# Ignore test result files
+*.xml
+*.html
