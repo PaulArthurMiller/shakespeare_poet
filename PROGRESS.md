@@ -100,3 +100,12 @@
   - Continue Milestone 5 macro guidance implementation.
 - Risks/notes:
   - None.
+
+## 2026-01-20 22:07 — Milestone 5 macro guidance
+- Added macro graph, state manager, and guidance emitter for beat-level runtime guidance.
+- Added macro unit tests covering beat ordering, guarded transitions, and anchor-aware guidance.
+- Next steps:
+  - Implement constraint enforcement and transition engine for Milestone 6.
+  - Add reuse lock and anchor constraint logic with tests.
+- Risks/notes:
+  - Guidance priors are heuristic placeholders and will need tuning with scoring.
