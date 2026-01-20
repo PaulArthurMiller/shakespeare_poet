@@ -31,6 +31,13 @@ If you cannot execute tests in your environment:
 - Ask Paul to paste the test output logs back.
 - Do not proceed beyond the milestone until passing status is confirmed via logs.
 
+### Branch discipline (required):
+Before starting each milestone, update your working copy of main and create a new branch from it.
+Run git status and git branch --show-current and include the output in your milestone notes.
+Branch name must be milestone-<N>-<short-name>.
+Do not commit to an existing milestone branch.
+If you cannot create a new branch for any reason, stop and report the exact git error output.
+
 ---
 
 ## Definition of Done (Project-Level)
