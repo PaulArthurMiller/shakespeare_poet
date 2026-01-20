@@ -109,3 +109,12 @@
   - Add reuse lock and anchor constraint logic with tests.
 - Risks/notes:
   - Guidance priors are heuristic placeholders and will need tuning with scoring.
+
+## 2026-01-20 22:43 — Milestone 6 constraints + transition engine
+- Added reuse lock, grammar/anchor constraints, and deterministic transition engine for candidate enumeration.
+- Added unit tests covering reuse pruning, anchor enforcement, and candidate enumeration.
+- Next steps:
+  - Implement scoring and beam search for Milestone 7.
+  - Add checkpoint and rollback support in search.
+- Risks/notes:
+  - Anchor constraint is lexical and will need semantic matching later.
