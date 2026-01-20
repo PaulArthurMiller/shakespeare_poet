@@ -6,6 +6,7 @@ import gc
 import json
 import shutil
 import time
+import sys
 
 from shpoet.vectorstore import ChromaStore
 
@@ -49,30 +50,32 @@ def test_build_and_query_index() -> None:
     """Ensure the vector store can build and return query results."""
 
     tmpdir = Path(mkdtemp())
+    persist_dir = tmpdir / "chroma"
+    store = None
+
     try:
         chunks_path = tmpdir / "line_chunks.jsonl"
         _write_chunks(chunks_path)
 
-        persist_dir = tmpdir / "chroma"
         store = ChromaStore(persist_dir)
-        count = store.build_index(_read_chunks(chunks_path))
+        try:
+            count = store.build_index(_read_chunks(chunks_path))
+            assert count == 2
 
-        assert count == 2
+            results = store.query("question", n_results=1)
+            assert results["ids"][0]
+        finally:
+            # Always close even if assertions fail
+            store.close()
+            store = None
+            gc.collect()
 
-        results = store.query("question", n_results=1)
-        assert results["ids"][0]
-
-        store.close()
-        # Ensure the SQLite handle releases on Windows before temp cleanup.
-        del store
-        gc.collect()
     finally:
-        # Windows can hold file handles briefly; retry cleanup.
-        for attempt in range(10):
-            try:
-                shutil.rmtree(tmpdir)
-                break
-            except PermissionError:
-                if attempt == 9:
-                    raise
-                time.sleep(0.1)
+        try:
+            shutil.rmtree(tmpdir)
+        except PermissionError:
+            if sys.platform.startswith("win"):
+                pass
+            else:
+                raise
+
