@@ -156,3 +156,14 @@
   - Add persistent storage for plans and generation outputs.
 - Risks/notes:
   - Anchor enforcement is relaxed when the corpus lacks required anchors; revisit with richer corpus coverage.
+
+## 2026-01-21 13:53 — Milestone 10 docs + replay suite
+- Expanded README with corpus/index build steps, demo plan/generation flow, replay suite, and next steps.
+- Added learning replay suite skeleton for regression-style checks.
+- Next steps:
+  - Expand ingestion to the full Shakespeare corpus with richer metadata.
+  - Implement meter/rhyme constraints and Tier-3 lazy features.
+  - Add macro-graph learning from replay outcomes and persistent storage for plans/jobs.
+  - Build a lightweight UI for plan review and playback.
+- Risks/notes:
+  - Branch context: `git status -sb` -> `## milestone-10-docs-replay`; `git branch --show-current` -> `milestone-10-docs-replay`.
