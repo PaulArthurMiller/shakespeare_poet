@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     log_config_path: Path = Field(default=Path("src/shpoet/config/logging.yaml"))
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
+    processed_dir: Path = Field(
+        default=Path("data/processed"),
+        validation_alias="SHPOET_PROCESSED_DIR",
+    )
 
 
 @lru_cache
@@ -25,3 +29,9 @@ def get_settings() -> Settings:
     """Return cached settings instance for consistent configuration access."""
 
     return Settings()
+
+
+def reset_settings() -> None:
+    """Clear cached settings to allow environment refresh in tests."""
+
+    get_settings.cache_clear()
