@@ -46,3 +46,4 @@ def test_beam_search_generates_without_reuse() -> None:
 
     assert len(result.best_path) == 2
     assert len(set(result.best_path)) == len(result.best_path)
+    assert result.critic_reports == []
