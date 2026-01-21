@@ -146,3 +146,13 @@
   - Implement Milestone 9 FastAPI endpoints for plan approval and generation.
 - Risks/notes:
   - LLM responses are stubbed; real providers will require stricter validation and rate limits.
+
+## 2026-01-21 12:07 — Milestone 9 API wiring
+- Added API request/response models, in-memory plan/job stores, and service layer to orchestrate plan approval and generation.
+- Wired FastAPI endpoints for plan creation, approval, generation, status, and export with logging and configuration hooks.
+- Added end-to-end API integration test with corpus build step and console logging.
+- Next steps:
+  - Expand generation orchestration to include critic/chooser toggles and richer status updates.
+  - Add persistent storage for plans and generation outputs.
+- Risks/notes:
+  - Anchor enforcement is relaxed when the corpus lacks required anchors; revisit with richer corpus coverage.
