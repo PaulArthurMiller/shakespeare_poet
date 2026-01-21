@@ -128,3 +128,11 @@
   - Integrate critic into checkpoint loop.
 - Risks/notes:
   - Scoring heuristics are minimal placeholders; will need tuning with real data.
+
+## 2026-01-21 10:37 — Milestone 7 demo search script
+- Added a demo script to generate a short beam-search sequence without reuse.
+- Next steps:
+  - Implement LLM critic and chooser toggle for Milestone 8.
+  - Integrate critic into checkpoint loop.
+- Risks/notes:
+  - Demo corpus is minimal; expand once richer constraints are available.
