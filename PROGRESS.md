@@ -118,3 +118,13 @@
   - Add checkpoint and rollback support in search.
 - Risks/notes:
   - Anchor constraint is lexical and will need semantic matching later.
+
+## 2026-01-20 18:14 — Milestone 7 scoring + beam search
+- Added scoring feature extraction and scoring engine with anchor/length heuristics.
+- Implemented beam search with checkpoints, rollback, and avoid-memory penalties.
+- Added unit tests covering scoring preference for anchors and beam no-reuse behavior.
+- Next steps:
+  - Implement LLM critic and chooser toggle for Milestone 8.
+  - Integrate critic into checkpoint loop.
+- Risks/notes:
+  - Scoring heuristics are minimal placeholders; will need tuning with real data.
