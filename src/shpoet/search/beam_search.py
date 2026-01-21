@@ -6,7 +6,9 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from shpoet.common.types import GuidanceProfile
+from shpoet.common.types import CriticReport, GuidanceProfile
+from shpoet.llm.chooser import ChoiceOption, Chooser
+from shpoet.llm.critic import Critic
 from shpoet.micro.reuse_lock import ReuseLock
 from shpoet.micro.transition_engine import TransitionEngine
 from shpoet.scoring.scoring_engine import ScoringEngine
@@ -25,6 +27,7 @@ class SearchResult:
     best_path: List[str]
     best_score: float
     checkpoints_used: int
+    critic_reports: List[CriticReport]
 
 
 class BeamSearch:
@@ -46,6 +49,8 @@ class BeamSearch:
         checkpoint_interval: int,
         avoid_memory: Optional[AvoidMemory] = None,
         initial_anchors: Optional[List[str]] = None,
+        critic: Optional[Critic] = None,
+        chooser: Optional[Chooser] = None,
     ) -> SearchResult:
         """Run beam search with checkpointing and rollback support."""
 
@@ -57,6 +62,7 @@ class BeamSearch:
         beams = [BeamState(path_ids=[], score=0.0, anchors_seen=anchors_seed)]
         best_path: List[str] = []
         best_score = float("-inf")
+        critic_reports: List[CriticReport] = []
 
         for depth in range(1, max_length + 1):
             candidates: List[BeamState] = []
@@ -100,6 +106,7 @@ class BeamSearch:
                 break
 
             candidates.sort(key=lambda beam_state: beam_state.score, reverse=True)
+            candidates = self._apply_chooser(candidates, guidance, depth, chooser)
             beams = candidates[:beam_width]
 
             if beams:
@@ -113,12 +120,22 @@ class BeamSearch:
 
             if checkpoint_interval and depth % checkpoint_interval == 0:
                 checkpoint_manager.save(depth, beams)
+                if critic and beams:
+                    window_text = self._render_window_text(beams[0].path_ids)
+                    report = critic.evaluate_window(
+                        window_id=f"depth-{depth}",
+                        guidance=guidance,
+                        window_text=window_text,
+                        anchors_seen=beams[0].anchors_seen,
+                    )
+                    critic_reports.append(report)
 
         logger.info("Beam search completed with best score %s", best_score)
         return SearchResult(
             best_path=best_path,
             best_score=best_score,
             checkpoints_used=checkpoint_manager.count(),
+            critic_reports=critic_reports,
         )
 
     def _build_transition_engine(self, used_ids: List[str]) -> TransitionEngine:
@@ -127,3 +144,59 @@ class BeamSearch:
         reuse_lock = ReuseLock()
         reuse_lock.mark_used_many(used_ids)
         return TransitionEngine(self._chunks, reuse_lock)
+
+    def _render_window_text(self, path_ids: List[str]) -> str:
+        """Render a window of chunk text for critic evaluation."""
+
+        lines = []
+        for chunk_id in path_ids:
+            chunk = self._chunk_map.get(chunk_id)
+            if not chunk:
+                continue
+            text = str(chunk.get("text", "")).strip()
+            if text:
+                lines.append(text)
+        return "\n".join(lines)
+
+    def _apply_chooser(
+        self,
+        candidates: List[BeamState],
+        guidance: GuidanceProfile,
+        depth: int,
+        chooser: Optional[Chooser],
+    ) -> List[BeamState]:
+        """Optionally reorder candidates using the chooser decision."""
+
+        if not chooser or not candidates:
+            return candidates
+
+        options = [
+            ChoiceOption(
+                option_id=beam.path_ids[-1],
+                score=beam.score,
+                preview=self._chunk_preview(beam.path_ids[-1]),
+            )
+            for beam in candidates
+            if beam.path_ids
+        ]
+        if not options:
+            return candidates
+
+        decision = chooser.choose(window_id=f"depth-{depth}", guidance=guidance, options=options)
+        if not decision.chosen_id:
+            return candidates
+
+        chosen = [beam for beam in candidates if beam.path_ids and beam.path_ids[-1] == decision.chosen_id]
+        remaining = [
+            beam
+            for beam in candidates
+            if not beam.path_ids or beam.path_ids[-1] != decision.chosen_id
+        ]
+        return chosen + remaining
+
+    def _chunk_preview(self, chunk_id: str) -> str:
+        """Return a short preview of a chunk for chooser context."""
+
+        chunk = self._chunk_map.get(chunk_id, {})
+        text = str(chunk.get("text", "")).strip()
+        return text[:120]

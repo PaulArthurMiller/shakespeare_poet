@@ -136,3 +136,13 @@
   - Integrate critic into checkpoint loop.
 - Risks/notes:
   - Demo corpus is minimal; expand once richer constraints are available.
+
+## 2026-01-21 11:09 — Milestone 8 LLM critic + chooser
+- Added LLM client abstraction, critic, and chooser modules with versioned prompts.
+- Integrated critic reporting and chooser reordering into beam search checkpoints.
+- Added unit tests for critic parsing, chooser behavior, and critic integration.
+- Next steps:
+  - Wire LLM critic/chooser into generation orchestration and API flows.
+  - Implement Milestone 9 FastAPI endpoints for plan approval and generation.
+- Risks/notes:
+  - LLM responses are stubbed; real providers will require stricter validation and rate limits.
