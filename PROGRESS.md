@@ -167,3 +167,18 @@
   - Build a lightweight UI for plan review and playback.
 - Risks/notes:
   - Branch context: `git status -sb` -> `## milestone-10-docs-replay`; `git branch --show-current` -> `milestone-10-docs-replay`.
+
+## 2026-01-21 16:45 — Phrase/fragment chunkers + smart tokenization
+- Added phrase chunker (`phrase_chunker.py`) for punctuation-based semantic phrase extraction with minimum 3-word constraint; complete short Shakespeare lines preserved as valid quotes.
+- Added fragment chunker (`fragment_chunker.py`) using spaCy NLP for 3-8 word semantic puzzle pieces; identifies noun phrases, verb phrases, prepositional phrases, and clauses; prioritizes smaller units over complete lines for play construction flexibility.
+- Enhanced provenance tracking with word index ranges (`start_word_idx`, `end_word_idx`), validation utilities, and human-readable reference formatting for quote map and validation systems.
+- Fixed critical tokenization bug: Unicode curly quotes now normalized to straight apostrophes; smart tokenization keeps contractions (`return'd`, `we'll`), possessives (`Neptune's`), archaic forms (`'tis`, `'twas`, `o'er`), and hyphenated words (`good-night`) as single tokens.
+- Added spaCy dependency to pyproject.toml.
+- Next steps:
+  - Integrate phrase/fragment chunks into vectorstore build pipeline.
+  - Add Tier-1 features for phrase and fragment chunks.
+  - Implement quote map for tracking used words during play generation.
+  - Consider rhythm/meter analysis for fragment selection during assembly.
+- Risks/notes:
+  - Fragment chunker requires spaCy model: `python -m spacy download en_core_web_sm`.
+  - Some words may be "lost" in fragment chunking when they don't form valid 3-8 word semantic units; this is by design to prioritize quote quality over coverage.
