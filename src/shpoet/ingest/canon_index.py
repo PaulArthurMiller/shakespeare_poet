@@ -15,7 +15,31 @@ logger = logging.getLogger(__name__)
 _PLAY_HEADER_RE = re.compile(r"^[A-Z][A-Z\s',.-]+$")
 _ACT_RE = re.compile(r"^ACT\s+([IVXLC]+)")
 _SCENE_RE = re.compile(r"^SCENE\s+([IVXLC]+)\b")
-_WORD_RE = re.compile(r"[A-Za-z']+")
+
+# Tokenization patterns for Shakespearean English
+# These handle contractions, possessives, archaic forms, and compounds properly
+
+# Pattern for hyphenated compound words
+# Matches: good-night, joint-labourer, new-born
+_HYPHENATED_WORD_RE = re.compile(
+    r"[A-Za-z]+(?:-[A-Za-z]+)+"  # word + hyphen + word (can repeat)
+)
+
+# Pattern for words with internal apostrophes (possessives, contractions)
+# Matches: Neptune's, return'd, we'll, don't, o'er, ne'er, e'en
+# Does NOT match: standalone 's or 'd
+_WORD_WITH_APOSTROPHE_RE = re.compile(
+    r"[A-Za-z]+(?:'[A-Za-z]+)+"  # word + apostrophe + letters (can repeat)
+)
+
+# Pattern for words starting with apostrophe (archaic contractions)
+# Matches: 'tis, 'twas, 'twill, 'gainst
+_APOSTROPHE_START_RE = re.compile(
+    r"'[A-Za-z]{2,}"  # apostrophe + at least 2 letters
+)
+
+# Pattern for simple words (no apostrophes or hyphens)
+_SIMPLE_WORD_RE = re.compile(r"[A-Za-z]{2,}|I|a|A|O|o")  # 2+ letters, or single I/a/A/O/o
 
 
 @dataclass(frozen=True)
@@ -61,9 +85,66 @@ def _is_play_header(line: str) -> bool:
 
 
 def _extract_tokens(line: str) -> List[str]:
-    """Extract word tokens from a line for word index tracking."""
+    """Extract word tokens from a line for word index tracking.
 
-    return _WORD_RE.findall(line)
+    Handles Shakespearean contractions, possessives, and archaic forms:
+    - Possessives: "Neptune's" → ["Neptune's"] (1 token, not 2)
+    - Contractions: "return'd", "we'll" → 1 token each
+    - Archaic: "'tis", "'twas", "o'er", "ne'er" → 1 token each
+    - Hyphenated: "good-night" → 1 token
+
+    Does NOT create tokens for:
+    - Standalone apostrophes or single letters from split contractions
+    - Punctuation
+    """
+    tokens = []
+    pos = 0
+
+    while pos < len(line):
+        char = line[pos]
+
+        # Skip whitespace and punctuation (except apostrophe which needs special handling)
+        if char.isspace() or (not char.isalpha() and char not in "'"):
+            pos += 1
+            continue
+
+        # Check for apostrophe-start words ('tis, 'twas, 'gainst)
+        if char == "'":
+            match = _APOSTROPHE_START_RE.match(line, pos)
+            if match:
+                tokens.append(match.group())
+                pos = match.end()
+                continue
+            else:
+                # Standalone apostrophe (quotation mark) - skip it
+                pos += 1
+                continue
+
+        # Check for hyphenated compound words first (good-night, joint-labourer)
+        match = _HYPHENATED_WORD_RE.match(line, pos)
+        if match:
+            tokens.append(match.group())
+            pos = match.end()
+            continue
+
+        # Check for words with internal apostrophes (Neptune's, return'd, o'er)
+        match = _WORD_WITH_APOSTROPHE_RE.match(line, pos)
+        if match:
+            tokens.append(match.group())
+            pos = match.end()
+            continue
+
+        # Check for simple words
+        match = _SIMPLE_WORD_RE.match(line, pos)
+        if match:
+            tokens.append(match.group())
+            pos = match.end()
+            continue
+
+        # Skip any other character
+        pos += 1
+
+    return tokens
 
 
 def build_canonical_index(lines: Iterable[str]) -> List[CanonicalLine]:
