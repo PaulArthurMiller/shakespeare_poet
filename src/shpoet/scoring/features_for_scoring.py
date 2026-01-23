@@ -38,14 +38,28 @@ def build_scoring_features(
     chunk: Dict[str, object],
     anchor_targets: Iterable[str],
 ) -> Dict[str, object]:
-    """Build a minimal scoring feature bundle from a chunk dictionary."""
+    """Build a scoring feature bundle from a chunk dictionary.
 
+    Includes both Tier-1 and Tier-2 features when available.
+    """
     tokens = _extract_tokens(chunk)
     anchor_hits = compute_anchor_hits(tokens, anchor_targets)
     features: Dict[str, object] = {
+        # Core features
         "token_count": int(chunk.get("token_count", len(tokens))),
         "anchor_hits": anchor_hits,
         "anchor_hit_count": len(anchor_hits),
+        # Tier-2 meter features (if available)
+        "syllable_count": int(chunk.get("syllable_count", 0)),
+        "iambic_score": float(chunk.get("iambic_score", 0.0)),
+        "is_iambic": bool(chunk.get("is_iambic", False)),
+        # Tier-2 semantic features (if available)
+        "emotion_valence": float(chunk.get("emotion_valence", 0.0)),
+        "emotion_intensity": float(chunk.get("emotion_intensity", 0.0)),
+        "topic_cluster": str(chunk.get("topic_cluster", "")),
+        # Tier-2 phonetic features (if available)
+        "rhyme_class": str(chunk.get("rhyme_class", "")),
+        "alliteration_sound": str(chunk.get("alliteration_sound", "")),
     }
     logger.debug("Scoring features built for chunk %s", chunk.get("chunk_id"))
     return features

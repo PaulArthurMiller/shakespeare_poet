@@ -21,12 +21,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from shpoet.chunking.provenance import build_phrase_provenance
+from shpoet.features.nlp_context import NLPContext
 from shpoet.ingest.canon_index import CanonicalLine
 
 logger = logging.getLogger(__name__)
-
-# Lazy-loaded spaCy model
-_nlp = None
 
 # Fragment size constraints
 MIN_FRAGMENT_WORDS = 3
@@ -56,28 +54,6 @@ ATTACHED_DEPS = frozenset([
     'case',     # case marking (of, in, to)
     'cc',       # coordinating conjunction
 ])
-
-
-def _get_nlp():
-    """Lazy-load the spaCy English model."""
-    global _nlp
-    if _nlp is None:
-        try:
-            import spacy
-            # Try to load the small English model
-            # Fall back to medium if small isn't available
-            try:
-                _nlp = spacy.load("en_core_web_sm")
-            except OSError:
-                logger.warning(
-                    "spaCy model 'en_core_web_sm' not found. "
-                    "Install with: python -m spacy download en_core_web_sm"
-                )
-                raise
-        except ImportError:
-            logger.error("spaCy not installed. Install with: pip install spacy")
-            raise
-    return _nlp
 
 
 @dataclass
@@ -614,7 +590,7 @@ def extract_fragments_from_line(
         )]
 
     # Parse with spaCy - always try to find syntactic splits
-    nlp = _get_nlp()
+    nlp = NLPContext.get_nlp()
     doc = nlp(text)
 
     # Align spaCy tokens to our tokens

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import chromadb
 
 from shpoet.features.tier1_raw import apply_tier1_features
+from shpoet.features.tier2_derived import apply_tier2_features
 from shpoet.vectorstore.embeddings import embed_query, embed_texts
 
 
@@ -46,10 +47,27 @@ class ChromaStore:
         if existing_ids:
             self._collection.delete(ids=existing_ids)
 
-    def build_index(self, chunks: List[Dict[str, object]], embedding_dimensions: int = 8) -> int:
-        """Build or rebuild the index from raw chunk dictionaries."""
+    def build_index(
+        self,
+        chunks: List[Dict[str, object]],
+        embedding_dimensions: int = 8,
+        apply_tier2: bool = True,
+    ) -> int:
+        """Build or rebuild the index from raw chunk dictionaries.
 
+        Args:
+            chunks: List of chunk dictionaries with text and tokens
+            embedding_dimensions: Embedding vector size (default 8)
+            apply_tier2: Whether to apply Tier-2 NLP features (default True)
+
+        Returns:
+            Number of chunks indexed
+        """
         enriched_chunks = apply_tier1_features(chunks)
+
+        if apply_tier2:
+            enriched_chunks = apply_tier2_features(enriched_chunks)
+
         documents = [str(chunk.get("text", "")) for chunk in enriched_chunks]
         ids = [str(chunk.get("chunk_id")) for chunk in enriched_chunks]
         metadatas = []

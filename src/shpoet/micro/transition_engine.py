@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Tuple
 from shpoet.common.types import GuidanceProfile
 from shpoet.micro.constraints.anchor import AnchorConstraint
 from shpoet.micro.constraints.grammar import GrammarConstraint
+from shpoet.micro.constraints.meter import MeterConstraint
+from shpoet.micro.constraints.rhyme import RhymeConstraint
 from shpoet.micro.reuse_lock import ReuseLock
 
 
@@ -32,6 +34,8 @@ class TransitionEngine:
         self._chunks = list(chunks)
         self._reuse_lock = reuse_lock
         self._grammar = GrammarConstraint()
+        self._meter = MeterConstraint()
+        self._rhyme = RhymeConstraint()
 
     def enumerate_candidates(
         self,
@@ -39,7 +43,7 @@ class TransitionEngine:
         anchors_seen: List[str],
         previous_chunk_id: Optional[str] = None,
     ) -> TransitionResult:
-        """Enumerate candidates that satisfy reuse, grammar, and anchor rules."""
+        """Enumerate candidates that satisfy reuse, grammar, meter, and anchor rules."""
 
         previous_chunk = None
         if previous_chunk_id:
@@ -47,6 +51,11 @@ class TransitionEngine:
 
         required_count = int(guidance.constraints.get("required_anchor_count", 0))
         anchor_constraint = AnchorConstraint(guidance.anchor_targets, required_count)
+
+        # Get meter strictness from guidance (0 = disabled, 1 = strict)
+        meter_strictness = float(guidance.constraints.get("meter_strictness", 0.0))
+        if meter_strictness > 0:
+            self._meter.set_strictness(meter_strictness)
 
         candidates: List[str] = []
         pruned: Dict[str, List[str]] = {}
@@ -65,6 +74,13 @@ class TransitionEngine:
                 pruned.setdefault(grammar_reason, []).append(chunk_id)
                 continue
 
+            # Meter constraint (if enabled)
+            if meter_strictness > 0 and previous_chunk is not None:
+                meter_ok, meter_reason = self._meter.evaluate(previous_chunk, chunk)
+                if not meter_ok:
+                    pruned.setdefault(meter_reason, []).append(chunk_id)
+                    continue
+
             anchor_ok, anchor_reason = anchor_constraint.evaluate(chunk, anchors_seen)
             if not anchor_ok:
                 pruned.setdefault(anchor_reason, []).append(chunk_id)
@@ -74,6 +90,10 @@ class TransitionEngine:
 
         logger.info("Enumerated %s candidates", len(candidates))
         return TransitionResult(candidates=candidates, pruned_reasons=pruned)
+
+    def get_rhyme_constraint(self) -> RhymeConstraint:
+        """Get the rhyme constraint for external configuration."""
+        return self._rhyme
 
     def _find_chunk(self, chunk_id: str) -> Dict[str, object]:
         """Locate a chunk dictionary by identifier."""
