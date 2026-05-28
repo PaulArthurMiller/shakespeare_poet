@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from shpoet.common.types import PlayPlan, UserPlayInput
 from shpoet.expander.expander import expand_play_input
@@ -80,6 +82,7 @@ def generate_play(
     job_store: JobStore,
     corpus_store: CorpusStore,
     config: GenerationConfig,
+    output_dir: Optional[Path] = None,
 ) -> GenerationRecord:
     """Generate a play from an approved plan and store the job output."""
 
@@ -107,6 +110,16 @@ def generate_play(
     )
     job_store.save(record)
     logger.info("Generation job %s completed for plan %s", job_id, plan_id)
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"{job_id}.md").write_text(generated.markdown, encoding="utf-8")
+        (output_dir / f"{job_id}.json").write_text(
+            json.dumps(generated.play_json, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info("Exported play files to %s", output_dir)
+
     return record
 
 

@@ -1,10 +1,12 @@
-"""In-memory stores for plans and generation jobs."""
+"""SQLite-backed stores for plans and generation jobs."""
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from shpoet.common.types import PlayDesignBrief, PlayPlan, UserPlayInput
 
@@ -33,45 +35,120 @@ class GenerationRecord:
 
 
 class PlanStore:
-    """Simple in-memory store for play plans."""
+    """SQLite-backed store for play plans."""
 
-    def __init__(self) -> None:
-        """Initialize an empty plan store."""
-
-        self._plans: Dict[str, PlanRecord] = {}
+    def __init__(self, db_path: str = ":memory:") -> None:
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plans (
+                plan_id   TEXT PRIMARY KEY,
+                user_input TEXT NOT NULL,
+                brief      TEXT NOT NULL,
+                plan       TEXT NOT NULL,
+                approved   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        self._conn.commit()
 
     def save(self, record: PlanRecord) -> None:
-        """Save a plan record to the store."""
-
-        self._plans[record.plan.plan_id] = record
+        """Persist a plan record, replacing any existing row with the same plan_id."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO plans (plan_id, user_input, brief, plan, approved) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                record.plan.plan_id,
+                record.user_input.model_dump_json(),
+                record.brief.model_dump_json(),
+                record.plan.model_dump_json(),
+                int(record.approved),
+            ),
+        )
+        self._conn.commit()
 
     def get(self, plan_id: str) -> Optional[PlanRecord]:
         """Retrieve a plan record by identifier."""
-
-        return self._plans.get(plan_id)
+        cursor = self._conn.execute(
+            "SELECT user_input, brief, plan, approved FROM plans WHERE plan_id = ?",
+            (plan_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return PlanRecord(
+            user_input=UserPlayInput.model_validate_json(row[0]),
+            brief=PlayDesignBrief.model_validate_json(row[1]),
+            plan=PlayPlan.model_validate_json(row[2]),
+            approved=bool(row[3]),
+        )
 
     def approve(self, plan_id: str) -> PlanRecord:
         """Mark a plan as approved and return the updated record."""
-
-        record = self._plans[plan_id]
-        record.approved = True
+        self._conn.execute(
+            "UPDATE plans SET approved = 1 WHERE plan_id = ?",
+            (plan_id,),
+        )
+        self._conn.commit()
+        record = self.get(plan_id)
+        assert record is not None
         return record
 
 
 class JobStore:
-    """Simple in-memory store for generation jobs."""
+    """SQLite-backed store for generation jobs."""
 
-    def __init__(self) -> None:
-        """Initialize an empty job store."""
-
-        self._jobs: Dict[str, GenerationRecord] = {}
+    def __init__(self, db_path: str = ":memory:") -> None:
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id       TEXT PRIMARY KEY,
+                plan_id      TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                output_lines TEXT NOT NULL DEFAULT '[]',
+                markdown     TEXT NOT NULL DEFAULT '',
+                play_json    TEXT NOT NULL DEFAULT '{}',
+                updated_at   TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.commit()
 
     def save(self, record: GenerationRecord) -> None:
-        """Save a generation record to the store."""
-
-        self._jobs[record.job_id] = record
+        """Persist a generation record, replacing any existing row with the same job_id."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO jobs "
+            "(job_id, plan_id, status, output_lines, markdown, play_json, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                record.job_id,
+                record.plan_id,
+                record.status,
+                json.dumps(record.output_lines),
+                record.markdown,
+                json.dumps(record.play_json),
+                record.updated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
 
     def get(self, job_id: str) -> Optional[GenerationRecord]:
         """Retrieve a generation record by identifier."""
-
-        return self._jobs.get(job_id)
+        cursor = self._conn.execute(
+            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at "
+            "FROM jobs WHERE job_id = ?",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return GenerationRecord(
+            job_id=row[0],
+            plan_id=row[1],
+            status=row[2],
+            output_lines=json.loads(row[3]),
+            markdown=row[4],
+            play_json=json.loads(row[5]),
+            updated_at=datetime.fromisoformat(row[6]),
+        )
