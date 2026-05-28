@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,16 @@ class Settings(BaseSettings):
     processed_dir: Path = Field(
         default=Path("data/processed"),
         validation_alias="SHPOET_PROCESSED_DIR",
+    )
+    db_path: str = Field(
+        default=":memory:",
+        description="SQLite database path. Set SHPOET_DB_PATH to a file path for persistent storage.",
+        validation_alias="SHPOET_DB_PATH",
+    )
+    output_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory for exported play files. Disabled when unset.",
+        validation_alias="SHPOET_OUTPUT_DIR",
     )
 
 

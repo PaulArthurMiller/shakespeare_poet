@@ -51,8 +51,8 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_config_path)
 
     app = FastAPI(title=settings.app_name)
-    app.state.plan_store = PlanStore()
-    app.state.job_store = JobStore()
+    app.state.plan_store = PlanStore(settings.db_path)
+    app.state.job_store = JobStore(settings.db_path)
     app.state.corpus_store = CorpusStore(settings.processed_dir)
 
     @app.get("/health")
@@ -105,6 +105,7 @@ def create_app() -> FastAPI:
                 app.state.job_store,
                 app.state.corpus_store,
                 payload.config,
+                output_dir=settings.output_dir,
             )
         except (KeyError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
