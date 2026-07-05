@@ -23,6 +23,20 @@ dependencies = [
 dev = [
   "ruff>=0.3.0",
 ]
+llm = [
+  "anthropic>=0.25.0",
+]
+embeddings-openai = [
+  "openai>=1.14.0",
+]
+embeddings-voyage = [
+  "voyageai>=0.3.0",
+]
+live = [
+  "anthropic>=0.25.0",
+  "openai>=1.14.0",
+  "voyageai>=0.3.0",
+]
 
 [build-system]
 requires = ["setuptools>=68.0.0", "wheel"]

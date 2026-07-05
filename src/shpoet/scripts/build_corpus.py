@@ -44,4 +44,20 @@ def build_corpus(source_path: Path = DEFAULT_SOURCE, output_dir: Path = DEFAULT_
 
 
 if __name__ == "__main__":
-    build_corpus()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build processed corpus artifacts from raw text.")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=DEFAULT_SOURCE,
+        help=f"Path to raw Shakespeare text file (default: {DEFAULT_SOURCE})",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help=f"Directory for processed output files (default: {DEFAULT_OUTPUT})",
+    )
+    args = parser.parse_args()
+    build_corpus(source_path=args.source, output_dir=args.output_dir)

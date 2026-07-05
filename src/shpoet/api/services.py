@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Tuple
 
 from shpoet.common.types import PlayPlan, UserPlayInput
 from shpoet.expander.expander import expand_play_input
+from shpoet.llm.chooser import Chooser
+from shpoet.llm.critic import Critic
 from shpoet.macro.guidance import GuidanceEmitter
 from shpoet.micro.corpus_store import CorpusStore
 from shpoet.scoring.features_for_scoring import compute_anchor_hits
@@ -83,6 +85,8 @@ def generate_play(
     corpus_store: CorpusStore,
     config: GenerationConfig,
     output_dir: Optional[Path] = None,
+    critic: Optional[Critic] = None,
+    chooser: Optional[Chooser] = None,
 ) -> GenerationRecord:
     """Generate a play from an approved plan and store the job output."""
 
@@ -97,7 +101,12 @@ def generate_play(
         corpus_store.load()
         chunks = corpus_store.list_chunks()
 
-    generated = _generate_play_from_plan(plan_record.plan, chunks, config)
+    active_critic = critic if config.use_critic else None
+    active_chooser = chooser if config.use_chooser else None
+
+    generated = _generate_play_from_plan(
+        plan_record.plan, chunks, config, active_critic, active_chooser
+    )
     job_id = str(uuid.uuid4())
     record = GenerationRecord(
         job_id=job_id,
@@ -127,6 +136,8 @@ def _generate_play_from_plan(
     plan: PlayPlan,
     chunks: List[Dict[str, object]],
     config: GenerationConfig,
+    critic: Optional[Critic] = None,
+    chooser: Optional[Chooser] = None,
 ) -> GeneratedPlay:
     """Generate play output for the provided plan using beam search."""
 
@@ -155,6 +166,8 @@ def _generate_play_from_plan(
                     max_length=config.max_length,
                     checkpoint_interval=config.checkpoint_interval,
                     initial_anchors=anchors_seen,
+                    critic=critic,
+                    chooser=chooser,
                 )
                 if not result.best_path:
                     logger.warning(
@@ -170,6 +183,8 @@ def _generate_play_from_plan(
                         max_length=config.max_length,
                         checkpoint_interval=config.checkpoint_interval,
                         initial_anchors=anchors_seen,
+                        critic=critic,
+                        chooser=chooser,
                     )
 
                 beat_lines, beat_line_ids = _render_lines_from_chunks(result.best_path, available_chunks)

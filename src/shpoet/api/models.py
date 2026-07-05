@@ -50,6 +50,8 @@ class GenerationConfig(BaseModel):
     beam_width: int = Field(default=3, description="Beam width for search.")
     max_length: int = Field(default=3, description="Maximum lines per beat.")
     checkpoint_interval: int = Field(default=2, description="Checkpoint interval for critic calls.")
+    use_critic: bool = Field(default=True, description="Enable LLM critic at checkpoints (requires ANTHROPIC_API_KEY).")
+    use_chooser: bool = Field(default=False, description="Enable LLM chooser for tie-breaking (requires ANTHROPIC_API_KEY).")
 
 
 class GenerateRequest(BaseModel):
