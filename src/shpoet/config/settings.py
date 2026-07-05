@@ -34,6 +34,43 @@ class Settings(BaseSettings):
         validation_alias="SHPOET_OUTPUT_DIR",
     )
 
+    # LLM (Anthropic — critic & chooser)
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    llm_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Anthropic model for critic/chooser. Haiku is fast and economical for checkpoint evals.",
+        validation_alias="SHPOET_LLM_MODEL",
+    )
+    use_critic: bool = Field(
+        default=True,
+        description="Enable LLM critic at beam-search checkpoints (requires ANTHROPIC_API_KEY).",
+        validation_alias="SHPOET_USE_CRITIC",
+    )
+    use_chooser: bool = Field(
+        default=False,
+        description="Enable LLM chooser for high-entropy decisions (requires ANTHROPIC_API_KEY).",
+        validation_alias="SHPOET_USE_CHOOSER",
+    )
+
+    # Embeddings
+    embedding_provider: str = Field(
+        default="openai",
+        description="Embedding provider: openai | voyage. Falls back to stub when no key is set.",
+        validation_alias="SHPOET_EMBEDDING_PROVIDER",
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-large",
+        description="Embedding model name. For Voyage AI use e.g. voyage-3-large.",
+        validation_alias="SHPOET_EMBEDDING_MODEL",
+    )
+    embedding_dimensions: int = Field(
+        default=3072,
+        description="Output dimensions. 3072 for text-embedding-3-large; 1024 for voyage-3-large.",
+        validation_alias="SHPOET_EMBEDDING_DIMENSIONS",
+    )
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    voyage_api_key: str = Field(default="", validation_alias="VOYAGE_API_KEY")
+
 
 @lru_cache
 def get_settings() -> Settings:

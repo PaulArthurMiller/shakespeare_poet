@@ -22,6 +22,7 @@ from shpoet.api.models import (
 )
 from shpoet.api.services import approve_plan, create_plan, generate_play
 from shpoet.api.state import JobStore, PlanStore
+from shpoet.llm.factory import create_critic_and_chooser, create_llm_client
 from shpoet.micro.corpus_store import CorpusStore
 
 from shpoet.config.settings import get_settings
@@ -54,6 +55,11 @@ def create_app() -> FastAPI:
     app.state.plan_store = PlanStore(settings.db_path)
     app.state.job_store = JobStore(settings.db_path)
     app.state.corpus_store = CorpusStore(settings.processed_dir)
+
+    llm_client = create_llm_client(settings.anthropic_api_key, settings.llm_model)
+    app.state.critic, app.state.chooser = create_critic_and_chooser(
+        llm_client, use_chooser=settings.use_chooser
+    )
 
     @app.get("/health")
     def health_check() -> dict[str, str]:
@@ -106,6 +112,8 @@ def create_app() -> FastAPI:
                 app.state.corpus_store,
                 payload.config,
                 output_dir=settings.output_dir,
+                critic=app.state.critic,
+                chooser=app.state.chooser,
             )
         except (KeyError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
