@@ -195,3 +195,15 @@
   - Re-run `build_corpus` / `build_index` against the full corpus so `data/processed` and the vectorstore pick up the corrected line_ids and previously-dropped lines.
 - Risks/notes:
   - Branch: `claude-fix-prologue-induction-header-parsing`. Anyone with cached corpus/vectorstore artifacts built before this fix should rebuild them — old line_ids for Twelfth Night and Taming of the Shrew's Induction are no longer valid.
+
+## 2026-07-08 — Per-batch checkpointing for the embedding loop
+- The embedding step in `build_index` had no resume support: `ChromaStore.build_index` computed embeddings for an entire chunk file in one call, and an interruption (crash, network failure, killed process) mid-run meant re-embedding — and re-paying the OpenAI/Voyage API for — the whole file on retry.
+- Added `src/shpoet/vectorstore/embedding_cache.py` (`EmbeddingCache`): a disk-backed cache keyed by `chunk_id` + a content hash of the chunk text, stored as `.embed_cache_<collection>.jsonl` next to each Chroma collection, with a `.meta.json` fingerprint (provider/model/dimensions) that invalidates the whole cache if the embedding config changes.
+- Added `embed_texts_with_checkpointing()` in `embeddings.py`, which batches by the active embedder's `batch_size` (500 for OpenAI, 128 for Voyage) and writes each completed batch to the cache immediately — a rerun skips any chunk whose id+text hash is already cached and only computes the remainder.
+- Wired `ChromaStore.build_index` to use the new checkpointed path instead of the old one-shot `embed_texts`.
+- Added `tests/test_embedding_checkpointing.py` covering cache round-trip, invalidation on config change, invalidation on changed source text, and an end-to-end resume-after-simulated-crash scenario.
+- Next steps:
+  - Re-run `build_index` against the full corpus (per the prior entry's note) — this rebuild is exactly the kind of large, real-API run the checkpointing was added for.
+- Risks/notes:
+  - Discovered while testing: `tests/test_vectorstore.py` (and any test that instantiates `ChromaStore` without forcing `SHPOET_EMBEDDING_PROVIDER=stub`) will use the real OpenAI embedder and hit the network, since `.env` has `SHPOET_EMBEDDING_PROVIDER=openai` and a real `OPENAI_API_KEY` set. Pre-existing behavior, not introduced by this change — verified this change by running the suite with `SHPOET_EMBEDDING_PROVIDER=stub` forced. Worth adding a test-time override later so `pytest` never depends on network/API keys by default.
+  - Branch: `claude-embedding-checkpointing`.

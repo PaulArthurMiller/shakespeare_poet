@@ -11,7 +11,7 @@ import chromadb
 
 from shpoet.features.tier1_raw import apply_tier1_features
 from shpoet.features.tier2_derived import apply_tier2_features
-from shpoet.vectorstore.embeddings import embed_query, embed_texts
+from shpoet.vectorstore.embeddings import embed_query, embed_texts_with_checkpointing
 
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,13 @@ class ChromaStore:
             raw_metadata = {key: value for key, value in chunk.items() if key not in {"text", "tokens"}}
             metadatas.append(self._sanitize_metadata(raw_metadata))
 
-        embeddings = embed_texts(documents, dimensions=embedding_dimensions)
+        embeddings = embed_texts_with_checkpointing(
+            ids=ids,
+            texts=documents,
+            dimensions=embedding_dimensions,
+            persist_dir=self._persist_dir,
+            collection_name=self._collection_name,
+        )
 
         self.reset_collection()
         self._collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
