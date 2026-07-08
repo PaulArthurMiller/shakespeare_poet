@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 _PLAY_HEADER_RE = re.compile(r"^[A-Z][A-Z\s',.-]+$")
 _ACT_RE = re.compile(r"^ACT\s+([IVXLC]+)")
-_SCENE_RE = re.compile(r"^SCENE\s+([IVXLC]+)\b")
+# The Sonnets number each poem with Arabic digits ("SCENE 1", "SCENE 2", ...)
+# instead of Roman numerals like the plays ("SCENE I", "SCENE II", ...), so
+# both forms must be accepted here or every sonnet line gets skipped.
+_SCENE_RE = re.compile(r"^SCENE\s+([IVXLC]+|\d+)\b")
 
 # Tokenization patterns for Shakespearean English
 # These handle contractions, possessives, archaic forms, and compounds properly
@@ -57,7 +60,10 @@ class CanonicalLine:
 
 
 def _roman_to_int(value: str) -> int:
-    """Convert a Roman numeral string into an integer."""
+    """Convert a Roman numeral or Arabic numeral string into an integer."""
+
+    if value.isdigit():
+        return int(value)
 
     roman_map = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
     total = 0
