@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class StubEmbedder:
     """Deterministic hash-based embedder for tests and offline development."""
 
     dimensions: int = 8
+    batch_size: int = 500
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         return [_hash_to_floats(t, self.dimensions) for t in texts]
@@ -47,6 +49,8 @@ def _hash_to_floats(text: str, dims: int) -> List[float]:
 
 class OpenAIEmbedder:
     """Embedder backed by the OpenAI Embeddings API."""
+
+    batch_size: int = _OPENAI_BATCH
 
     def __init__(self, api_key: str, model: str, dimensions: int) -> None:
         from openai import OpenAI
@@ -80,6 +84,8 @@ class OpenAIEmbedder:
 
 class VoyageAIEmbedder:
     """Embedder backed by the Voyage AI Embeddings API."""
+
+    batch_size: int = _VOYAGE_BATCH
 
     def __init__(self, api_key: str, model: str, dimensions: int) -> None:
         import voyageai
@@ -170,3 +176,69 @@ def embed_texts(texts: List[str], dimensions: int = 8) -> List[List[float]]:
 def embed_query(query: str, dimensions: int = 8) -> List[float]:
     """Return an embedding for a query string."""
     return _get_embedder().embed_query(query)  # type: ignore[attr-defined]
+
+
+def embed_texts_with_checkpointing(
+    ids: List[str],
+    texts: List[str],
+    dimensions: int,
+    persist_dir: Path,
+    collection_name: str,
+) -> List[List[float]]:
+    """Embed texts in batches, checkpointing each batch to disk as it completes.
+
+    If the process is interrupted partway through (network error, killed
+    process), rerunning this against the same persist_dir/collection_name
+    resumes from the last completed batch instead of re-embedding — and
+    re-paying the API cost for — chunks that were already done.
+    """
+    from shpoet.config.settings import get_settings
+    from shpoet.vectorstore.embedding_cache import EmbeddingCache, content_hash
+
+    settings = get_settings()
+    embedder = _get_embedder()
+    batch_size: int = getattr(embedder, "batch_size", len(texts) or 1)
+
+    cache = EmbeddingCache(
+        persist_dir=persist_dir,
+        collection_name=collection_name,
+        provider=settings.embedding_provider,
+        model=settings.embedding_model,
+        dimensions=dimensions,
+    )
+
+    total = len(ids)
+    hashes = [content_hash(text) for text in texts]
+    results: List[Optional[List[float]]] = [None] * total
+
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        batch_ids = ids[start:end]
+        batch_texts = texts[start:end]
+        batch_hashes = hashes[start:end]
+
+        pending_offsets: List[int] = []
+        pending_texts: List[str] = []
+        for offset, (chunk_id, chunk_hash) in enumerate(zip(batch_ids, batch_hashes)):
+            cached_embedding = cache.get(chunk_id, chunk_hash)
+            if cached_embedding is not None:
+                results[start + offset] = cached_embedding
+            else:
+                pending_offsets.append(offset)
+                pending_texts.append(batch_texts[offset])
+
+        if pending_texts:
+            computed = embedder.embed(pending_texts)  # type: ignore[attr-defined]
+            computed_ids = [batch_ids[offset] for offset in pending_offsets]
+            computed_hashes = [batch_hashes[offset] for offset in pending_offsets]
+            cache.append_batch(computed_ids, computed_hashes, computed)
+            for offset, embedding in zip(pending_offsets, computed):
+                results[start + offset] = embedding
+
+        logger.info("Embedding checkpoint: %d/%d chunks ready", end, total)
+
+    missing = sum(1 for embedding in results if embedding is None)
+    if missing:
+        raise RuntimeError(f"Failed to compute embeddings for {missing} of {total} chunks")
+
+    return results  # type: ignore[return-value]
