@@ -46,6 +46,82 @@ def test_canonical_index_handles_arabic_numbered_sonnet_scenes() -> None:
     assert canonical[1].line_id == "the_sonnets_act1_scene2_line1"
 
 
+def test_canonical_index_handles_scene_prologue() -> None:
+    """Ensure "SCENE PROLOGUE" (Chorus speeches) is not skipped.
+
+    Regression test: the scene regex only matched Roman/Arabic numerals, so
+    "SCENE PROLOGUE" (used in Henry IV Pt.2, Henry V, Henry VIII, Pericles,
+    Romeo and Juliet, Troilus and Cressida, and Two Noble Kinsmen) left
+    `scene` as None, silently dropping every line up to the next numbered
+    SCENE header.
+    """
+
+    sample_lines = [
+        "THE LIFE OF KING HENRY THE FIFTH",
+        "ACT I",
+        "SCENE PROLOGUE",
+        "O for a Muse of fire, that would ascend",
+        "SCENE I. London. An ante-chamber in the King's palace.",
+        "My lord, I'll tell you that self bill is urged,",
+    ]
+
+    canonical = build_canonical_index(sample_lines)
+
+    assert len(canonical) == 2
+    assert canonical[0].line_id == "the_life_of_king_henry_the_fifth_act1_scene0_line1"
+    assert canonical[1].line_id == "the_life_of_king_henry_the_fifth_act1_scene1_line1"
+
+
+def test_canonical_index_handles_act_induction() -> None:
+    """Ensure "ACT INDUCTION" (The Taming of the Shrew) gets its own act number.
+
+    Regression test: the act regex `^ACT\\s+([IVXLC]+)` had no trailing word
+    boundary, so it partially matched the leading "I" in "INDUCTION" and
+    mislabeled the Induction as ACT 1 — colliding its line_ids with the real
+    Act 1 Scene 1/2 that follows.
+    """
+
+    sample_lines = [
+        "THE TAMING OF THE SHREW",
+        "ACT INDUCTION",
+        "SCENE I",
+        "I'll pheeze you, in faith.",
+        "ACT I",
+        "SCENE I. Padua. A public place.",
+        "Tranio, since for the great desire I had",
+    ]
+
+    canonical = build_canonical_index(sample_lines)
+
+    assert len(canonical) == 2
+    assert canonical[0].line_id == "the_taming_of_the_shrew_act0_scene1_line1"
+    assert canonical[1].line_id == "the_taming_of_the_shrew_act1_scene1_line1"
+
+
+def test_canonical_index_handles_semicolon_in_play_title() -> None:
+    """Ensure play titles containing a semicolon are recognized as headers.
+
+    Regression test: "TWELFTH NIGHT; OR, WHAT YOU WILL" failed the play
+    header regex (semicolon wasn't in the allowed character class), so the
+    header line was never detected. The play name silently stayed whatever
+    the previous play was, colliding every subsequent line_id with that
+    play's lines.
+    """
+
+    sample_lines = [
+        "TWELFTH NIGHT; OR, WHAT YOU WILL",
+        "ACT I",
+        "SCENE I. An Apartment in the Duke's Palace.",
+        "If music be the food of love, play on,",
+    ]
+
+    canonical = build_canonical_index(sample_lines)
+
+    assert len(canonical) == 1
+    assert canonical[0].play == "Twelfth Night; Or, What You Will"
+    assert canonical[0].line_id == "twelfth_night_or_what_you_will_act1_scene1_line1"
+
+
 def test_line_chunks_include_provenance() -> None:
     """Ensure line chunks include provenance metadata."""
 

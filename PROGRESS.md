@@ -182,3 +182,16 @@
 - Risks/notes:
   - Fragment chunker requires spaCy model: `python -m spacy download en_core_web_sm`.
   - Some words may be "lost" in fragment chunking when they don't form valid 3-8 word semantic units; this is by design to prioritize quote quality over coverage.
+
+## 2026-07-08 17:15 — Fix canonical indexer dropping/mislabeling non-numbered headers
+- Debugged a report of sonnet-adjacent lines being skipped ("Skipping line before headers are set"); traced the actual cause to `SCENE PROLOGUE` (Chorus speeches), not the Sonnets — the Sonnets themselves parse with 0 skips.
+- Fixed three related bugs in `src/shpoet/ingest/canon_index.py`:
+  - `_SCENE_RE` didn't accept `PROLOGUE`, so 921 lines across 6 plays (Henry IV Pt.2, Henry V, Henry VIII, Pericles, Romeo and Juliet, Troilus and Cressida, Two Noble Kinsmen) were silently dropped.
+  - `_ACT_RE` had no trailing `\b`, so `ACT INDUCTION` (Taming of the Shrew) partially matched as `ACT I`, colliding line_ids with the real Act 1.
+  - `_PLAY_HEADER_RE` didn't allow `;`, so `TWELFTH NIGHT; OR, WHAT YOU WILL` was never detected as a play header — its ~2,234 lines were silently mislabeled as whatever play preceded it (Troilus and Cressida), causing 955 duplicate line_ids.
+- Added `INDUCTION`/`PROLOGUE` as sentinel act/scene value 0 (they always precede the numbered acts/scenes, so 0 can never collide).
+- Added 3 regression tests in `tests/test_chunking.py`. Full corpus re-verified: 0 skipped lines (was 921), 0 duplicate line_ids (was 955).
+- Next steps:
+  - Re-run `build_corpus` / `build_index` against the full corpus so `data/processed` and the vectorstore pick up the corrected line_ids and previously-dropped lines.
+- Risks/notes:
+  - Branch: `claude-fix-prologue-induction-header-parsing`. Anyone with cached corpus/vectorstore artifacts built before this fix should rebuild them — old line_ids for Twelfth Night and Taming of the Shrew's Induction are no longer valid.

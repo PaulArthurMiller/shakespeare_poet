@@ -12,12 +12,23 @@ from shpoet.ingest.normalize import normalize_line
 
 logger = logging.getLogger(__name__)
 
-_PLAY_HEADER_RE = re.compile(r"^[A-Z][A-Z\s',.-]+$")
-_ACT_RE = re.compile(r"^ACT\s+([IVXLC]+)")
+# ";" must be allowed here for "TWELFTH NIGHT; OR, WHAT YOU WILL" — without
+# it, the header line is rejected and the whole play silently inherits the
+# previous play's name, colliding every line_id with that play's lines.
+_PLAY_HEADER_RE = re.compile(r"^[A-Z][A-Z\s',.;-]+$")
+# "ACT INDUCTION" (The Taming of the Shrew) is a non-numbered act that
+# precedes ACT I. Without the INDUCTION alternative and the trailing \b,
+# [IVXLC]+ partially matches its leading "I" and mislabels it as ACT 1,
+# colliding line_ids with the real Act 1 Scene 1/2 that follows.
+_ACT_RE = re.compile(r"^ACT\s+(INDUCTION|[IVXLC]+)\b")
 # The Sonnets number each poem with Arabic digits ("SCENE 1", "SCENE 2", ...)
 # instead of Roman numerals like the plays ("SCENE I", "SCENE II", ...), so
 # both forms must be accepted here or every sonnet line gets skipped.
-_SCENE_RE = re.compile(r"^SCENE\s+([IVXLC]+|\d+)\b")
+# "SCENE PROLOGUE" (Chorus speeches in Henry IV Pt.2, Henry V, Henry VIII,
+# Pericles, Romeo and Juliet, Troilus and Cressida, Two Noble Kinsmen) is
+# likewise non-numbered; without it every line until the next numbered
+# SCENE header is dropped as "before headers are set".
+_SCENE_RE = re.compile(r"^SCENE\s+(PROLOGUE|[IVXLC]+|\d+)\b")
 
 # Tokenization patterns for Shakespearean English
 # These handle contractions, possessives, archaic forms, and compounds properly
@@ -60,10 +71,19 @@ class CanonicalLine:
 
 
 def _roman_to_int(value: str) -> int:
-    """Convert a Roman numeral or Arabic numeral string into an integer."""
+    """Convert a Roman numeral, Arabic numeral, or non-numbered structural
+    label (INDUCTION, PROLOGUE) into an integer.
+
+    INDUCTION and PROLOGUE always precede the numbered acts/scenes they
+    belong to, so 0 is a safe sentinel: it can never collide with a real
+    act/scene 1, 2, 3, ...
+    """
 
     if value.isdigit():
         return int(value)
+
+    if value in ("INDUCTION", "PROLOGUE"):
+        return 0
 
     roman_map = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
     total = 0
