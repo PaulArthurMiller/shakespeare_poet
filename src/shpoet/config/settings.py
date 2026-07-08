@@ -82,4 +82,7 @@ def get_settings() -> Settings:
 def reset_settings() -> None:
     """Clear cached settings to allow environment refresh in tests."""
 
-    get_settings.cache_clear()
+    # get_settings may have been monkeypatched to a plain callable by a test
+    # (e.g. to inject a fake Settings double); nothing to clear in that case.
+    if hasattr(get_settings, "cache_clear"):
+        get_settings.cache_clear()

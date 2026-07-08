@@ -205,5 +205,12 @@
 - Next steps:
   - Re-run `build_index` against the full corpus (per the prior entry's note) — this rebuild is exactly the kind of large, real-API run the checkpointing was added for.
 - Risks/notes:
-  - Discovered while testing: `tests/test_vectorstore.py` (and any test that instantiates `ChromaStore` without forcing `SHPOET_EMBEDDING_PROVIDER=stub`) will use the real OpenAI embedder and hit the network, since `.env` has `SHPOET_EMBEDDING_PROVIDER=openai` and a real `OPENAI_API_KEY` set. Pre-existing behavior, not introduced by this change — verified this change by running the suite with `SHPOET_EMBEDDING_PROVIDER=stub` forced. Worth adding a test-time override later so `pytest` never depends on network/API keys by default.
+  - Discovered while testing: `tests/test_vectorstore.py` (and any test that instantiates `ChromaStore` without forcing `SHPOET_EMBEDDING_PROVIDER=stub`) will use the real OpenAI embedder and hit the network, since `.env` has `SHPOET_EMBEDDING_PROVIDER=openai` and a real `OPENAI_API_KEY` set. Pre-existing behavior, not introduced by this change.
   - Branch: `claude-embedding-checkpointing`.
+
+## 2026-07-08 — Autouse fixture to force stub embedder in tests
+- Added `tests/conftest.py` with an autouse `_force_stub_embedder` fixture: sets `SHPOET_EMBEDDING_PROVIDER=stub` and resets the settings/embedder caches before and after every test, so `pytest` never depends on network access or the real `OPENAI_API_KEY` in `.env`. Tests that need real-provider logic can still override the env var themselves within the test.
+- Fixed a latent bug this surfaced: `reset_settings()` in `src/shpoet/config/settings.py` assumed `get_settings` was always the `lru_cache`-wrapped function. `tests/test_embedding_checkpointing.py` monkeypatches `get_settings` to a plain lambda for two tests, and the new fixture's teardown call to `reset_settings()` then hit `AttributeError: 'function' object has no attribute 'cache_clear'`. `reset_settings()` now guards with `hasattr(get_settings, "cache_clear")` before clearing.
+- Verified: full suite (109 tests) passes with no `SHPOET_EMBEDDING_PROVIDER` override set in the shell — the fixture alone keeps it from touching the real API.
+- Risks/notes:
+  - Branch: `claude-embedding-checkpointing` (same PR as the embedding checkpointing work).
