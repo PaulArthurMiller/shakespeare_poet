@@ -27,14 +27,20 @@ def build_index(
     persist_dir: Path,
     collection_name: str = "shpoet_lines",
     embedding_dimensions: int = 8,
+    resume: bool = False,
 ) -> int:
-    """Build or rebuild a Chroma index for the provided chunk file."""
+    """Build or rebuild a Chroma index for the provided chunk file.
 
+    Pass resume=True to skip chunks already present in the collection and
+    continue from where a previous interrupted run left off.
+    """
     chunks = _load_chunks(chunks_path)
     persist_dir.mkdir(parents=True, exist_ok=True)
     store = ChromaStore(persist_dir, collection_name=collection_name)
     try:
-        count = store.build_index(chunks, embedding_dimensions=embedding_dimensions)
+        count = store.build_index(
+            chunks, embedding_dimensions=embedding_dimensions, resume=resume
+        )
     finally:
         store.close()
 
