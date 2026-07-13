@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
-from typing import List, Dict
 
 from shpoet.vectorstore.build_index import build_index
 from shpoet.config.settings import get_settings
@@ -24,18 +22,26 @@ CHUNK_FILES = [
 ]
 
 
-def main(processed_dir: Path = DEFAULT_PROCESSED, chroma_dir: Path = DEFAULT_CHROMA) -> None:
-    """Index all available chunk types into their respective Chroma collections."""
+def main(
+    processed_dir: Path = DEFAULT_PROCESSED,
+    chroma_dir: Path = DEFAULT_CHROMA,
+    resume: bool = False,
+) -> None:
+    """Index all available chunk types into their respective Chroma collections.
 
+    With resume=True, chunks already present in a collection are skipped so
+    an interrupted run can be continued without losing completed work.
+    """
     settings = get_settings()
     dimensions = settings.embedding_dimensions
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logger.info(
-        "Building index: provider=%s model=%s dims=%d",
+        "Building index: provider=%s model=%s dims=%d resume=%s",
         settings.embedding_provider,
         settings.embedding_model,
         dimensions,
+        resume,
     )
 
     indexed_total = 0
@@ -50,11 +56,12 @@ def main(processed_dir: Path = DEFAULT_PROCESSED, chroma_dir: Path = DEFAULT_CHR
             persist_dir=chroma_dir,
             collection_name=collection_name,
             embedding_dimensions=dimensions,
+            resume=resume,
         )
-        logger.info("Indexed %d chunks into '%s'", count, collection_name)
+        logger.info("Added %d chunks into '%s'", count, collection_name)
         indexed_total += count
 
-    logger.info("Done. Total chunks indexed: %d", indexed_total)
+    logger.info("Done. Chunks added this run: %d", indexed_total)
 
 
 if __name__ == "__main__":
@@ -71,5 +78,10 @@ if __name__ == "__main__":
         default=DEFAULT_CHROMA,
         help="Directory for Chroma persistence (default: data/chroma)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip chunks already present in the collection and continue from where the last run stopped.",
+    )
     args = parser.parse_args()
-    main(processed_dir=args.processed_dir, chroma_dir=args.chroma_dir)
+    main(processed_dir=args.processed_dir, chroma_dir=args.chroma_dir, resume=args.resume)

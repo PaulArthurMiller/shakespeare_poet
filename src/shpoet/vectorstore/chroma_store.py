@@ -16,6 +16,10 @@ from shpoet.vectorstore.embeddings import embed_query, embed_texts
 
 logger = logging.getLogger(__name__)
 
+# Chunks per ChromaDB add() call. Each call embeds this many texts then
+# persists them before moving on, so a crash loses at most one batch.
+_INDEX_BATCH_SIZE = 500
+
 
 class ChromaStore:
     """Owns a Chroma client and provides index/query operations."""
@@ -52,36 +56,73 @@ class ChromaStore:
         chunks: List[Dict[str, object]],
         embedding_dimensions: int = 8,
         apply_tier2: bool = True,
+        resume: bool = False,
     ) -> int:
         """Build or rebuild the index from raw chunk dictionaries.
 
+        Each batch is embedded and added to ChromaDB before the next batch
+        begins, so a crash loses at most _INDEX_BATCH_SIZE chunks of work.
+
         Args:
-            chunks: List of chunk dictionaries with text and tokens
-            embedding_dimensions: Embedding vector size (default 8)
-            apply_tier2: Whether to apply Tier-2 NLP features (default True)
+            chunks: List of chunk dictionaries with text and tokens.
+            embedding_dimensions: Advisory embedding size (used by stub embedder;
+                real providers use their configured dimensions).
+            apply_tier2: Whether to apply Tier-2 NLP features.
+            resume: When True, skip chunks already present in the collection
+                and continue from where a previous run left off.
 
         Returns:
-            Number of chunks indexed
+            Number of chunks added in this call (excludes pre-existing).
         """
-        enriched_chunks = apply_tier1_features(chunks)
+        # Tier-1 is fast; run on everything so we have IDs for the resume check.
+        enriched = apply_tier1_features(chunks)
 
+        if resume:
+            existing_ids = set(self._collection.get(include=[]).get("ids", []))
+            pending = [c for c in enriched if str(c.get("chunk_id")) not in existing_ids]
+            logger.info(
+                "Resume: %d already indexed, %d remaining in '%s'",
+                len(existing_ids), len(pending), self._collection_name,
+            )
+        else:
+            self.reset_collection()
+            pending = enriched
+
+        if not pending:
+            logger.info("Nothing to index in '%s'", self._collection_name)
+            return 0
+
+        # Tier-2 (spaCy) only on the chunks we actually need to embed.
         if apply_tier2:
-            enriched_chunks = apply_tier2_features(enriched_chunks)
+            pending = apply_tier2_features(pending)
 
-        documents = [str(chunk.get("text", "")) for chunk in enriched_chunks]
-        ids = [str(chunk.get("chunk_id")) for chunk in enriched_chunks]
-        metadatas = []
-        for chunk in enriched_chunks:
-            raw_metadata = {key: value for key, value in chunk.items() if key not in {"text", "tokens"}}
-            metadatas.append(self._sanitize_metadata(raw_metadata))
+        indexed = 0
+        total = len(pending)
+        for i in range(0, total, _INDEX_BATCH_SIZE):
+            batch = pending[i : i + _INDEX_BATCH_SIZE]
+            documents = [str(c.get("text", "")) for c in batch]
+            ids = [str(c.get("chunk_id")) for c in batch]
+            metadatas = [
+                self._sanitize_metadata(
+                    {k: v for k, v in c.items() if k not in {"text", "tokens"}}
+                )
+                for c in batch
+            ]
+            embeddings = embed_texts(documents, dimensions=embedding_dimensions)
+            self._collection.add(
+                ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
+            )
+            indexed += len(batch)
+            logger.info(
+                "Progress: %d/%d chunks indexed into '%s'",
+                indexed, total, self._collection_name,
+            )
 
-        embeddings = embed_texts(documents, dimensions=embedding_dimensions)
-
-        self.reset_collection()
-        self._collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
-
-        logger.info("Indexed %s chunks into collection %s", len(ids), self._collection_name)
-        return len(ids)
+        logger.info(
+            "Done: %d chunks added; collection '%s' total = %d",
+            indexed, self._collection_name, self._collection.count(),
+        )
+        return indexed
 
     def query(
         self,
