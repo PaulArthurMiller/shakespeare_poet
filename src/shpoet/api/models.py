@@ -91,3 +91,50 @@ class ExportResponse(BaseModel):
     plan_id: str = Field(..., description="Associated plan identifier.")
     markdown: str = Field(..., description="Markdown export of the play.")
     play_json: dict = Field(..., description="JSON export of the play.")
+
+
+class GenerationSummary(BaseModel):
+    """Summary of a saved generation for the composer library."""
+
+    job_id: str = Field(..., description="Generation job identifier.")
+    plan_id: str = Field(..., description="Associated plan identifier.")
+    status: str = Field(..., description="Generation status.")
+    line_count: int = Field(..., description="Number of generated lines.")
+    title: str = Field(default="Untitled generation", description="Best-effort generated title.")
+    file_name: str = Field(..., description="Stable export-style file name.")
+    updated_at: datetime = Field(..., description="Last update timestamp.")
+
+
+class GenerationLibraryResponse(BaseModel):
+    """Response containing saved generations for the composer picker."""
+
+    generations: List[GenerationSummary] = Field(default_factory=list)
+
+
+class LineMark(BaseModel):
+    """Review mark attached to a generated line."""
+
+    line_index: int = Field(..., ge=0, description="Zero-based generated line index.")
+    note: str = Field(default="", description="Optional note explaining why the line is marked.")
+    created_at: Optional[datetime] = Field(default=None, description="Creation timestamp supplied by the server.")
+
+
+class LineMarksResponse(BaseModel):
+    """Response containing review marks for a generation."""
+
+    job_id: str = Field(..., description="Generation job identifier.")
+    marks: List[LineMark] = Field(default_factory=list)
+
+
+class AdminConfig(BaseModel):
+    """Editable frontend-facing generation and model configuration."""
+
+    model: str = Field(default="claude-3-5-sonnet-20241022")
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    beam_width: int = Field(default=3, ge=1, le=25)
+    max_length: int = Field(default=3, ge=1, le=50)
+    checkpoint_interval: int = Field(default=2, ge=1, le=50)
+    use_critic: bool = Field(default=True)
+    use_chooser: bool = Field(default=False)
+    anchor_pressure: float = Field(default=1.0, ge=0.0, le=5.0)
+    updated_at: Optional[datetime] = Field(default=None)

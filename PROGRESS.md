@@ -214,3 +214,15 @@
 - Verified: full suite (109 tests) passes with no `SHPOET_EMBEDDING_PROVIDER` override set in the shell — the fixture alone keeps it from touching the real API.
 - Risks/notes:
   - Branch: `claude-embedding-checkpointing` (same PR as the embedding checkpointing work).
+
+## 2026-07-16 17:02 EDT — Frontend workbench
+- Added a FastAPI-served frontend with separate setup, composer/viewer, and admin pages for the Shakespearean cento workflow.
+- Added generation library, persistent line review marks, and editable admin configuration endpoints backed by SQLite.
+- Added API coverage for frontend support endpoints and validated import/health behavior.
+- Next steps:
+  - Replace synchronous generation with a streaming/background composition job so lines can arrive live in the viewer.
+  - Add richer plan review editing before approval and export affordances in the composer.
+  - Add browser-based visual regression tests once a browser runtime is available in the environment.
+- Risks/notes:
+  - Existing full API flow tests still require the `en_core_web_sm` spaCy model for fragment chunking; this environment does not have that model installed.
+  - The composer currently loads completed generation records and marks lines persistently; true live scrolling will need an async generation endpoint or SSE feed.
