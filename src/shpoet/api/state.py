@@ -95,6 +95,31 @@ class PlanStore:
         return record
 
 
+@dataclass
+class LineMarkRecord:
+    """Stored review mark for a generated line."""
+
+    job_id: str
+    line_index: int
+    note: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class AdminConfigRecord:
+    """Stored runtime configuration edited from the admin page."""
+
+    model: str = "claude-3-5-sonnet-20241022"
+    temperature: float = 0.2
+    beam_width: int = 3
+    max_length: int = 3
+    checkpoint_interval: int = 2
+    use_critic: bool = True
+    use_chooser: bool = False
+    anchor_pressure: float = 1.0
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class JobStore:
     """SQLite-backed store for generation jobs."""
 
@@ -110,6 +135,33 @@ class JobStore:
                 markdown     TEXT NOT NULL DEFAULT '',
                 play_json    TEXT NOT NULL DEFAULT '{}',
                 updated_at   TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS line_marks (
+                job_id     TEXT NOT NULL,
+                line_index INTEGER NOT NULL,
+                note       TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (job_id, line_index)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_config (
+                config_id           TEXT PRIMARY KEY,
+                model               TEXT NOT NULL,
+                temperature         REAL NOT NULL,
+                beam_width          INTEGER NOT NULL,
+                max_length          INTEGER NOT NULL,
+                checkpoint_interval INTEGER NOT NULL,
+                use_critic          INTEGER NOT NULL,
+                use_chooser         INTEGER NOT NULL,
+                anchor_pressure     REAL NOT NULL,
+                updated_at          TEXT NOT NULL
             )
             """
         )
@@ -152,3 +204,115 @@ class JobStore:
             play_json=json.loads(row[5]),
             updated_at=datetime.fromisoformat(row[6]),
         )
+
+
+    def list_recent(self, limit: int = 50) -> List[GenerationRecord]:
+        """Return recent generation jobs for the composer library."""
+        cursor = self._conn.execute(
+            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at "
+            "FROM jobs ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        )
+        records: List[GenerationRecord] = []
+        for row in cursor.fetchall():
+            records.append(
+                GenerationRecord(
+                    job_id=row[0],
+                    plan_id=row[1],
+                    status=row[2],
+                    output_lines=json.loads(row[3]),
+                    markdown=row[4],
+                    play_json=json.loads(row[5]),
+                    updated_at=datetime.fromisoformat(row[6]),
+                )
+            )
+        return records
+
+    def save_line_mark(self, mark: LineMarkRecord) -> None:
+        """Persist or update a review mark for one generated line."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO line_marks (job_id, line_index, note, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (mark.job_id, mark.line_index, mark.note, mark.created_at.isoformat()),
+        )
+        self._conn.commit()
+
+    def delete_line_mark(self, job_id: str, line_index: int) -> None:
+        """Remove a review mark for one generated line."""
+        self._conn.execute(
+            "DELETE FROM line_marks WHERE job_id = ? AND line_index = ?",
+            (job_id, line_index),
+        )
+        self._conn.commit()
+
+    def list_line_marks(self, job_id: str) -> List[LineMarkRecord]:
+        """Return all review marks associated with a generation job."""
+        cursor = self._conn.execute(
+            "SELECT job_id, line_index, note, created_at FROM line_marks "
+            "WHERE job_id = ? ORDER BY line_index",
+            (job_id,),
+        )
+        return [
+            LineMarkRecord(
+                job_id=row[0],
+                line_index=row[1],
+                note=row[2],
+                created_at=datetime.fromisoformat(row[3]),
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def get_admin_config(self) -> AdminConfigRecord:
+        """Return the saved admin configuration or defaults."""
+        cursor = self._conn.execute(
+            "SELECT model, temperature, beam_width, max_length, checkpoint_interval, "
+            "use_critic, use_chooser, anchor_pressure, updated_at "
+            "FROM admin_config WHERE config_id = 'default'"
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return AdminConfigRecord()
+        return AdminConfigRecord(
+            model=row[0],
+            temperature=row[1],
+            beam_width=row[2],
+            max_length=row[3],
+            checkpoint_interval=row[4],
+            use_critic=bool(row[5]),
+            use_chooser=bool(row[6]),
+            anchor_pressure=row[7],
+            updated_at=datetime.fromisoformat(row[8]),
+        )
+
+    def save_admin_config(self, config: AdminConfigRecord) -> AdminConfigRecord:
+        """Persist admin configuration edited through the frontend."""
+        updated = AdminConfigRecord(
+            model=config.model,
+            temperature=config.temperature,
+            beam_width=config.beam_width,
+            max_length=config.max_length,
+            checkpoint_interval=config.checkpoint_interval,
+            use_critic=config.use_critic,
+            use_chooser=config.use_chooser,
+            anchor_pressure=config.anchor_pressure,
+            updated_at=datetime.now(timezone.utc),
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO admin_config "
+            "(config_id, model, temperature, beam_width, max_length, checkpoint_interval, "
+            "use_critic, use_chooser, anchor_pressure, updated_at) "
+            "VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                updated.model,
+                updated.temperature,
+                updated.beam_width,
+                updated.max_length,
+                updated.checkpoint_interval,
+                int(updated.use_critic),
+                int(updated.use_chooser),
+                updated.anchor_pressure,
+                updated.updated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+        return updated

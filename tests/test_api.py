@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
 from shpoet.api.main import create_app
+from shpoet.api.state import GenerationRecord
 from shpoet.common.types import CharacterInput, SceneInput, UserPlayInput
 from shpoet.config.settings import reset_settings
 from shpoet.scripts.build_corpus import build_corpus
@@ -96,3 +97,58 @@ def test_plan_approve_generate_flow(tmp_path: Path, monkeypatch: MonkeyPatch) ->
     export_payload = export_response.json()
     print(f"[test] export markdown chars={len(export_payload['markdown'])}")
     assert export_payload["markdown"]
+
+
+
+def test_frontend_support_endpoints(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """Ensure frontend library, marks, and admin config endpoints persist data."""
+
+    monkeypatch.setenv("SHPOET_DB_PATH", str(tmp_path / "frontend.sqlite3"))
+    reset_settings()
+
+    client = TestClient(create_app())
+    job_id = "job-frontend"
+    client.app.state.job_store.save(
+        GenerationRecord(
+            job_id=job_id,
+            plan_id="plan-frontend",
+            status="completed",
+            output_lines=["To be, or not to be", "The rest is silence"],
+            play_json={"title": "The Test Canto"},
+        )
+    )
+
+    library_response = client.get("/generations")
+    assert library_response.status_code == 200
+    assert library_response.json()["generations"][0]["job_id"] == job_id
+
+    mark_response = client.put(
+        f"/generate/{job_id}/marks",
+        json={"line_index": 0, "note": "Needs a second look."},
+    )
+    assert mark_response.status_code == 200
+    assert mark_response.json()["marks"][0]["note"] == "Needs a second look."
+
+    delete_response = client.delete(f"/generate/{job_id}/marks/0")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["marks"] == []
+
+    config_response = client.put(
+        "/admin/config",
+        json={
+            "model": "claude-test",
+            "temperature": 0.4,
+            "beam_width": 4,
+            "max_length": 5,
+            "checkpoint_interval": 3,
+            "use_critic": False,
+            "use_chooser": True,
+            "anchor_pressure": 1.5,
+        },
+    )
+    assert config_response.status_code == 200
+    assert config_response.json()["model"] == "claude-test"
+
+    saved_config_response = client.get("/admin/config")
+    assert saved_config_response.status_code == 200
+    assert saved_config_response.json()["beam_width"] == 4
