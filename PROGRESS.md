@@ -392,3 +392,42 @@ end to end.
     emotion knob as "emotion doesn't help".
   - Retrieval quality is only as good as the beat objective text the expander
     writes; thin or generic objectives will retrieve generic material.
+
+## 2026-07-30 15:05 — BUILD-PLAN.md for the remaining work
+- Added `BUILD-PLAN.md`: architecture-as-built diagrams, the metadata-boundary
+  explanation, per-beat data flow, and seven milestones with acceptance criteria,
+  risks, and open questions. The original `INSTRUCTION.md` milestones 0–10 are
+  complete; this plan covers the gap between "every module exists" and "the
+  modules are connected and produce measurable quality".
+- Milestone order and the reasoning behind it:
+  - **M1 Turn on the artistic knobs** — `macro/guidance.py` is the single
+    junction box gating meter/length/emotion. Smallest change, largest effect,
+    fully unblocked by the retrieval work. Knobs go in settings, not hardcoded,
+    so the knobs-off control group stays reproducible for the M3 A/B.
+  - **M2 Quote integrity** — `ReuseLock` keys on `chunk_id`, but overlapping
+    chunks from one source line have different ids, so the play can reuse the
+    same words and still pass. This violates the project's defining rule, and it
+    has to be fixed before any quality measurement is trustworthy.
+  - **M3 Real evaluation harness** — build the ruler before measuring. Note that
+    `learning/replay_suite.py` is worse than absent: `run_scenario()` always
+    returns `passed=True`, so a green suite currently means nothing. Replaced,
+    not extended.
+  - **M4 First quality runs and tuning** — the milestone that answers the actual
+    question. Also forces the `RhymeConstraint` decision: wire it or delete it.
+  - **M5 Restore the frontend** — independent of M1–M4; required before
+    "playbacks" are possible. The JS files are the spec for the missing HTML.
+  - **M6 Long-run ergonomics** — background job + incremental status. Deliberately
+    after M4, which is what tells us how long a real run takes.
+  - **M7 Deferred** — semantics valence fix, Tier-3 decision, `learning/updater.py`.
+- Next steps:
+  - Merge PR #23 (`claude-vectorstore-retrieval`); M1 builds on it.
+  - Start M1: extend `GuidanceEmitter.guidance_for_beat()` to emit
+    `meter_strictness`, `meter_preference`, `length_preference`,
+    `emotion_alignment`, `target_valence`, with defaults in `config/settings.py`.
+- Risks/notes:
+  - Branch: `claude-build-plan`, stacked on `claude-vectorstore-retrieval` so the
+    PROGRESS.md history stays linear. Merge #23 first.
+  - Recurring failure mode named explicitly in the plan's conventions: this
+    codebase fails *silently*. A missing metadata key becomes a `0.0` default, a
+    dimension mismatch becomes an empty pool, a placeholder returns `passed=True`.
+    Every wiring change should land with a test that fails if the wire is cut again.
