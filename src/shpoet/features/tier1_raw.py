@@ -37,10 +37,20 @@ _FUNCTION_WORDS = {
 
 
 
-def _tokenize(text: str) -> List[str]:
-    """Tokenize text into word tokens for feature extraction."""
+def tokenize(text: str) -> List[str]:
+    """Tokenize text into word tokens for feature extraction.
+
+    Public because the retrieval layer must rebuild the ``tokens`` list for
+    chunks read back out of Chroma: token lists are not scalars, so they are
+    dropped from the stored metadata, and rehydrating them any other way would
+    silently diverge from how they were derived at index time.
+    """
 
     return _WORD_RE.findall(text)
+
+
+# Retained for existing internal call sites.
+_tokenize = tokenize
 
 
 def _punctuation_profile(text: str) -> Dict[str, int]:

@@ -226,3 +226,169 @@
 - Risks/notes:
   - Existing full API flow tests still require the `en_core_web_sm` spaCy model for fragment chunking; this environment does not have that model installed.
   - The composer currently loads completed generation records and marks lines persistently; true live scrolling will need an async generation endpoint or SSE feed.
+
+## 2026-07-30 14:10 — State-of-play audit before first quality runs
+Reconstructed actual project state after a gap in the log (no entries between
+2026-07-08 and the 07-16 frontend commit, while the full-corpus embedding run
+finished 07-19 and the Tier-2 feature work landed unlogged in `c459e2d`).
+Recording findings here so the next session does not have to re-derive them.
+
+**Confirmed done:**
+- Full corpus is chunked and embedded. Chroma holds three complete collections,
+  verified against `data/processed/*.jsonl` with exact parity:
+  `shpoet_lines` 112,065 / `shpoet_phrases` 147,924 / `shpoet_fragments` 187,099
+  = 447,088 embeddings, OpenAI `text-embedding-3-large` @ 3072 dims, ~7.5 GB.
+  The `.embed_cache_*.jsonl` checkpoint files are complete for all three.
+- Test suite green: 109 passing before this branch.
+- Artistic-constraint *machinery* exists and is substantive: `features/meter.py`,
+  `features/phonetics.py` (CMUdict rhyme classes + `data/archaic_pronunciations.json`),
+  `features/syllables.py`, `features/semantics.py`, `micro/constraints/meter.py`,
+  `micro/constraints/rhyme.py`. Tier-2 metadata (`stress_pattern`, `rhyme_class`,
+  `iambic_score`, `emotion_valence`) is attached at index time in
+  `vectorstore/chroma_store.py:98`.
+
+**Confirmed NOT done — blockers for meaningful quality runs:**
+1. *Generation never touches the vectorstore.* `generate_play` reads
+   `CorpusStore.list_chunks()` → `data/processed/line_chunks.jsonl`. Nothing
+   outside `scripts/build_index.py` and tests imports `shpoet.vectorstore`.
+   Consequences: the 447k embeddings are unused at generation time; only the
+   112k line chunks feed generation (phrase + fragment chunks never load); and
+   there is no semantic narrowing — `TransitionEngine.enumerate_candidates`
+   linearly scans all ~112k chunks per beam per depth, rebuilding a fresh
+   `TransitionEngine` each time (`search/beam_search.py:72,141-146`).
+2. *The artistic metadata is not on the generation path at all.* The processed
+   JSONL files carry only `text`/`tokens`/`play`/`act`/`scene`/`word_index` —
+   no `stress_pattern`, `rhyme_class`, `syllable_count`, or `emotion_valence`.
+   Those exist only inside Chroma. So `MeterConstraint.evaluate` finds an empty
+   pattern and returns `(True, "ok")` (`micro/constraints/meter.py:55-57`), and
+   `build_scoring_features` defaults every Tier-2 field to `0.0`.
+3. *No artistic knob is switched on.* `GuidanceEmitter.guidance_for_beat()`
+   emits only `required_anchor_count`/`desired_anchor_count` and
+   `anchor_presence`/`primary_anchor_weight` (`macro/guidance.py:55-66`). But
+   `TransitionEngine` gates meter on `constraints["meter_strictness"]`
+   (`transition_engine.py:56-58`) and `ScoringEngine` reads
+   `priors["meter_preference"]` / `priors["emotion_alignment"]`
+   (`scoring_engine.py:48-49`) — none of which are ever emitted. Every artistic
+   term is multiplied by zero. Effective score today is
+   `anchor_hits − |token_count − 10| × 0.1`.
+4. *`RhymeConstraint` has never executed.* Constructed in `TransitionEngine.__init__`
+   and exposed via `get_rhyme_constraint()`, which nothing calls.
+5. *`features/tier3_lazy.py` is dead code.* 260 lines of spaCy dependency trees /
+   NER / noun phrases, imported by nothing, not re-exported in
+   `features/__init__.py`, no tests.
+6. *The frontend does not serve.* `.gitignore` ended with a blanket `*.html`
+   (intended for coverage reports; `htmlcov/` already covers those), which
+   silently excluded `index.html`, `composer.html`, and `admin.html` from commit
+   `d331ff6`. The JS and CSS were committed; the three pages were not, and are
+   not present on any machine checked. `GET /` `/composer` `/admin` all return
+   500; `/health` and `/static/app.js` return 200. The new tests only exercise
+   the JSON support endpoints, so CI stayed green and the gap went unnoticed.
+   Removed the blanket `*.html` rule on this branch so the pages can be
+   committed once recovered or regenerated.
+7. *Admin config knobs are partly inert.* `AdminConfig` persists `model`,
+   `temperature`, and `anchor_pressure`, and `static/app.js` posts the whole
+   record as the `/generate` config — but `GenerationConfig` declares only
+   `beam_width`, `max_length`, `checkpoint_interval`, `use_critic`,
+   `use_chooser`, so Pydantic drops the other three silently.
+
+**Assessment:** not ready for quality runs. Generation would be slow *and* every
+signal being evaluated is structurally zero. Existing artifacts in `data/output/`
+are 227-byte, 3-line toy-corpus smoke tests from 07-08, predating the full corpus.
+
+- Next steps (in order):
+  - Retrieval step: per-beat candidate pool queried from Chroma, returning
+    top-N chunks *with Tier-2 metadata attached*, fed to `BeamSearch` in place of
+    the whole corpus. Prerequisite for everything else — fixes speed, brings
+    phrase/fragment chunks into play, and supplies the metadata the constraints
+    need. Started on branch `claude-vectorstore-retrieval`.
+  - Wire `macro/guidance.py` to emit `meter_strictness`, `meter_preference`,
+    `length_preference`, `emotion_alignment`/`target_valence` per beat.
+  - Call `RhymeConstraint` from the transition/scoring path, or delete the getter.
+  - Recover/regenerate the three missing HTML pages and commit them; add a
+    smoke test asserting `GET /`, `/composer`, `/admin` return 200.
+  - Widen `GenerationConfig` to carry `anchor_pressure` (and decide whether
+    `model`/`temperature` should reach the critic/chooser).
+  - Then run quality passes and playbacks.
+- Risks/notes:
+  - Branch: `claude-vectorstore-retrieval`, cut from `main` @ `c943dfc`.
+
+## 2026-07-30 14:30 — Per-beat candidate retrieval from the vector index
+Closes blocker #1 from the audit above: generation now draws its candidates
+from Chroma instead of walking the whole processed corpus.
+
+- Added `src/shpoet/micro/candidate_pool.py` (`CandidatePool`). For each beat it
+  builds a semantic query from the beat's objective + rhetorical mode + anchor
+  vocabulary (`build_beat_query`), queries all three collections, merges and
+  dedupes by `chunk_id`, drops ids already consumed elsewhere in the play, and
+  returns a deterministically ordered pool sorted by `(distance, chunk_id)`.
+- Added `rehydrate_chunk`, which rebuilds search-ready chunk dicts from Chroma
+  result rows. `text` comes back from the stored document and `tokens` is
+  re-derived (token lists are not scalars, so Chroma drops them from metadata);
+  JSON-encoded fields (`punctuation`, `phonemes`, `pos_tags`) are decoded.
+  **This is what makes the artistic constraints possible at all** — Tier-1 and
+  Tier-2 features are computed at index time and exist nowhere else, so the old
+  JSONL path could never have fed them to scoring.
+- Exposed `tokenize()` publicly in `features/tier1_raw.py` so rehydration derives
+  tokens exactly the way indexing did, rather than diverging on its own split.
+- Added `ChromaStore.embedding_dimension()` and `ChromaStore.count()`.
+- Wired `CandidatePool` through `api/services.generate_play` (new optional
+  `candidate_pool` arg) and `api/main.create_app`. Retrieval is the default path;
+  the full-corpus walk remains as an explicit fallback and now logs a warning
+  explaining that Tier-2 metadata is unavailable on that path.
+- Added `SHPOET_CHROMA_DIR` and `SHPOET_RETRIEVAL_POOL_SIZE` settings
+  (pool size 0 disables retrieval).
+
+**Bug found and fixed while testing:** an embedding-dimension mismatch failed
+silently in the worst possible way. Querying the 3072-dim index with an 8-dim
+stub vector raised inside Chroma once per collection per beat; each beat caught
+it, logged, fell back to an empty pool, and the job completed "successfully"
+with an empty play. `CandidatePool._verify_dimensions()` now checks stored vs.
+configured dimensions at construction and raises with the exact setting to fix.
+`_build_candidate_pool()` in `api/main.py` catches that and degrades to the full
+corpus rather than failing app startup on a fresh clone with no index.
+
+**Test isolation fixed:** `tests/conftest.py` now also redirects
+`SHPOET_CHROMA_DIR` and `SHPOET_OUTPUT_DIR` to a per-test temp directory. The
+API flow test had been writing generated plays into the real `data/output`, and
+once the app opened a pool at startup it would otherwise have queried the real
+447k-chunk production index. `tests/test_api.py::test_plan_approve_generate_flow`
+now builds a real index over the fixture corpus so the flow exercises retrieval
+end to end.
+
+- Verified against the real full-corpus index (`data/chroma`, 447,088 chunks,
+  OpenAI text-embedding-3-large @ 3072):
+  - Opening all three collections: ~5.0s, one time at app startup.
+  - Per-beat query: ~1.2–2.5s, 800 candidates selected from 1,596 retrieved.
+  - Retrieval is on-target. Query "A ruler confronts a mirror that remembers
+    every broken oath / soliloquy / crown mirror oath" returned "As doth a ruler
+    with unlawful oaths" (1H6 5.5), "Is crowned so soon and broke his solemn
+    oath" (3H6 1.4), "Against my crown my oath my dignity" (Err. 1.1), "But now
+    two mirrors of his princely semblance" (R3 2.2).
+  - Tier-2 metadata arrives intact: e.g. `syllable_count=10 iambic_score=0.9
+    stress_pattern=1101010101 rhyme_class=OW_DH_Z`.
+- Full suite green: 126 tests (109 prior + 16 new retrieval tests + 1 rewritten).
+- Next steps:
+  - Wire `macro/guidance.py` to emit `meter_strictness`, `meter_preference`,
+    `length_preference`, `emotion_alignment`/`target_valence`. Now unblocked —
+    the metadata these read is finally present on the chunks.
+  - Dedupe near-identical candidates across collections. The pool currently
+    returns e.g. `..._line101` and `..._line101_p0` — the same words differing
+    only by trailing punctuation. Worse, the reuse lock keys on `chunk_id`, so
+    nothing stops the search from emitting both. Needs normalized-text dedupe in
+    the pool and probably a source-span check in `ReuseLock`.
+  - Tune `pool_size` (currently 800) once the artistic knobs are live; it trades
+    candidate diversity against per-beat search cost.
+  - Call `RhymeConstraint` from the transition/scoring path, or delete the getter.
+  - Recover/regenerate the three missing HTML pages; add a smoke test asserting
+    `GET /`, `/composer`, `/admin` return 200.
+- Risks/notes:
+  - Measured signal quality in the index before relying on it: `iambic_score` is
+    well spread (0.5/0.6/0.333/0.667/0.7 all heavily populated), so the meter
+    knob has real signal to work with. **`emotion_valence` is degenerate** —
+    396,370 of 447,088 chunks (89%) are exactly 0.0, with the remainder almost
+    entirely ±1.0. The keyword lexicon in `features/semantics.py` is too coarse
+    to be worth weighting; turning on `emotion_alignment` will do close to
+    nothing until that extractor is improved. Do not read a null result from the
+    emotion knob as "emotion doesn't help".
+  - Retrieval quality is only as good as the beat objective text the expander
+    writes; thin or generic objectives will retrieve generic material.
