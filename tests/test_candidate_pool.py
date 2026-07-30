@@ -20,8 +20,10 @@ from shpoet.common.types import BeatObligation, BeatPlan
 from shpoet.micro.candidate_pool import (
     CandidatePool,
     build_beat_query,
+    normalize_for_dedupe,
     rehydrate_chunk,
 )
+from shpoet.micro.reuse_lock import ReuseLock
 from shpoet.vectorstore import ChromaStore
 
 
@@ -33,6 +35,8 @@ _CHUNKS: List[dict] = [
         "play": "Hamlet",
         "act": 3,
         "scene": 1,
+        "start_word_idx": 0,
+        "end_word_idx": 9,
     },
     {
         "chunk_id": "line_2",
@@ -41,6 +45,8 @@ _CHUNKS: List[dict] = [
         "play": "Hamlet",
         "act": 3,
         "scene": 2,
+        "start_word_idx": 0,
+        "end_word_idx": 6,
     },
     {
         "chunk_id": "line_3",
@@ -49,6 +55,8 @@ _CHUNKS: List[dict] = [
         "play": "Romeo and Juliet",
         "act": 2,
         "scene": 2,
+        "start_word_idx": 0,
+        "end_word_idx": 7,
     },
     {
         "chunk_id": "line_4",
@@ -57,6 +65,8 @@ _CHUNKS: List[dict] = [
         "play": "Richard III",
         "act": 1,
         "scene": 1,
+        "start_word_idx": 0,
+        "end_word_idx": 6,
     },
 ]
 
@@ -191,7 +201,7 @@ class TestCandidatePool:
             assert "last_token" in chunk
             assert "starts_with_function_word" in chunk
 
-    def test_excludes_used_chunk_ids(self, indexed_dir: Path) -> None:
+    def test_excludes_used_chunks(self, indexed_dir: Path) -> None:
         """Already-consumed chunks must not reappear in a later beat's pool."""
 
         pool = CandidatePool(
@@ -203,15 +213,17 @@ class TestCandidatePool:
         try:
             everything = pool.for_beat(_beat(), [])
             assert everything.size >= 2
-            victim = str(everything.chunks[0]["chunk_id"])
+            victim = everything.chunks[0]
+            lock = ReuseLock()
+            lock.mark_used(victim)
 
-            filtered = pool.for_beat(_beat(), [], exclude_ids={victim})
+            filtered = pool.for_beat(_beat(), [], reuse_lock=lock)
         finally:
             pool.close()
             gc.collect()
 
         returned_ids = {str(chunk["chunk_id"]) for chunk in filtered.chunks}
-        assert victim not in returned_ids
+        assert str(victim["chunk_id"]) not in returned_ids
         assert filtered.excluded >= 1
 
     def test_respects_pool_size_cap(self, indexed_dir: Path) -> None:
@@ -278,8 +290,9 @@ class TestCandidatePool:
             pool_size=10,
         )
         try:
-            all_ids = {str(c["chunk_id"]) for c in pool.for_beat(_beat(), []).chunks}
-            result = pool.for_beat(_beat(), [], exclude_ids=all_ids)
+            lock = ReuseLock()
+            lock.mark_used_many(pool.for_beat(_beat(), []).chunks)
+            result = pool.for_beat(_beat(), [], reuse_lock=lock)
         finally:
             pool.close()
             gc.collect()
