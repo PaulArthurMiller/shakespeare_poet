@@ -173,9 +173,10 @@ class TestMeterConstraintActuallyPrunes:
         guidance = GuidanceEmitter(_registry(), knobs=knobs).guidance_for_beat(
             BeatPlan(beat_id="b", objective="o", rhetorical_mode="reflection")
         )
+        chunks = self._chunks()
         lock = ReuseLock()
-        lock.mark_used_many(["prev"])
-        engine = TransitionEngine(self._chunks(), lock)
+        lock.mark_used_many(chunk for chunk in chunks if chunk["chunk_id"] == "prev")
+        engine = TransitionEngine(chunks, lock)
         result = engine.enumerate_candidates(
             guidance=guidance, anchors_seen=[], previous_chunk_id="prev"
         )

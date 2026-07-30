@@ -139,10 +139,23 @@ class BeamSearch:
         )
 
     def _build_transition_engine(self, used_ids: List[str]) -> TransitionEngine:
-        """Create a transition engine with a reuse lock seeded by used ids."""
+        """Create a transition engine with a reuse lock seeded by this beam's path.
+
+        The lock is seeded with the chunk *dicts*, not the ids: it locks the
+        source word spans those chunks occupy, so a beam cannot extend itself
+        with a phrase cut from a line it has already quoted.
+        """
 
         reuse_lock = ReuseLock()
-        reuse_lock.mark_used_many(used_ids)
+        for chunk_id in used_ids:
+            chunk = self._chunk_map.get(chunk_id)
+            if chunk is None:
+                # Should not happen -- paths are built from this pool -- but an
+                # id with no chunk still has to stay locked.
+                logger.warning("Path chunk %s not in pool; locking by id only", chunk_id)
+                reuse_lock.mark_id_used(chunk_id)
+                continue
+            reuse_lock.mark_used(chunk)
         return TransitionEngine(self._chunks, reuse_lock)
 
     def _render_window_text(self, path_ids: List[str]) -> str:
