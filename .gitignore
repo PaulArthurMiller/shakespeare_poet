@@ -54,4 +54,5 @@ htmlcov/
 .coverage.*
 # Ignore test result files
 *.xml
-*.html
+# NOTE: do not add a blanket `*.html` here — it silently excluded the frontend
+# pages in src/shpoet/api/static/. Coverage HTML is already covered by htmlcov/.
