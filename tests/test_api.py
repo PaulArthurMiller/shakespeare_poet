@@ -11,6 +11,7 @@ from shpoet.api.state import GenerationRecord
 from shpoet.common.types import CharacterInput, SceneInput, UserPlayInput
 from shpoet.config.settings import reset_settings
 from shpoet.scripts.build_corpus import build_corpus
+from shpoet.scripts.build_index import main as build_all_indexes
 
 
 def _build_input() -> UserPlayInput:
@@ -49,12 +50,24 @@ def test_health_check() -> None:
 
 
 def test_plan_approve_generate_flow(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-    """Ensure plan generation flows through approval and generation."""
+    """Ensure plan generation flows through approval and generation.
+
+    Builds both the corpus and the vector index so the run exercises the
+    retrieval path -- generation now draws its per-beat candidates from Chroma,
+    so a corpus without an index produces an empty play.
+    """
 
     fixture_path = Path("tests/fixtures/sample_lines.txt")
     build_corpus(source_path=fixture_path, output_dir=tmp_path)
+
+    chroma_dir = tmp_path / "chroma"
     monkeypatch.setenv("SHPOET_PROCESSED_DIR", str(tmp_path))
+    monkeypatch.setenv("SHPOET_CHROMA_DIR", str(chroma_dir))
+    # Must match the stub embedder forced by conftest, or the pool refuses to open.
+    monkeypatch.setenv("SHPOET_EMBEDDING_DIMENSIONS", "8")
     reset_settings()
+
+    build_all_indexes(processed_dir=tmp_path, chroma_dir=chroma_dir)
 
     client = TestClient(create_app())
     request_id = "req-api-flow"

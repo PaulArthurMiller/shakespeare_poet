@@ -23,6 +23,19 @@ class Settings(BaseSettings):
         default=Path("data/processed"),
         validation_alias="SHPOET_PROCESSED_DIR",
     )
+    chroma_dir: Path = Field(
+        default=Path("data/chroma"),
+        description="Directory holding the persisted Chroma collections used for candidate retrieval.",
+        validation_alias="SHPOET_CHROMA_DIR",
+    )
+    retrieval_pool_size: int = Field(
+        default=800,
+        description=(
+            "Candidate chunks retrieved per beat, summed across collections. "
+            "Set to 0 to disable retrieval and fall back to the full processed corpus."
+        ),
+        validation_alias="SHPOET_RETRIEVAL_POOL_SIZE",
+    )
     db_path: str = Field(
         default=":memory:",
         description="SQLite database path. Set SHPOET_DB_PATH to a file path for persistent storage.",

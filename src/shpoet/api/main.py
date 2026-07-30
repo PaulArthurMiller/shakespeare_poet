@@ -30,6 +30,7 @@ from shpoet.api.models import (
 from shpoet.api.services import approve_plan, create_plan, generate_play
 from shpoet.api.state import AdminConfigRecord, JobStore, LineMarkRecord, PlanStore
 from shpoet.llm.factory import create_critic_and_chooser, create_llm_client
+from shpoet.micro.candidate_pool import CandidatePool
 from shpoet.micro.corpus_store import CorpusStore
 
 from shpoet.config.settings import get_settings
@@ -52,6 +53,36 @@ def configure_logging(config_path: Path) -> None:
     logging.config.dictConfig(config_data)
 
 
+def _build_candidate_pool(settings: Any) -> CandidatePool | None:
+    """Open the retrieval pool, or return None to fall back to the full corpus.
+
+    Startup must survive a missing or unbuilt index -- a fresh clone has no
+    Chroma directory, and the API should still serve /health and the planning
+    endpoints rather than crash on import.
+    """
+
+    if settings.retrieval_pool_size <= 0:
+        logger.warning("Retrieval disabled (SHPOET_RETRIEVAL_POOL_SIZE=0); using full corpus")
+        return None
+
+    try:
+        pool = CandidatePool(
+            persist_dir=settings.chroma_dir,
+            embedding_dimensions=settings.embedding_dimensions,
+            pool_size=settings.retrieval_pool_size,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.warning(
+            "Candidate retrieval unavailable (%s); falling back to the full processed corpus. "
+            "Run `python -m shpoet.scripts.build_index` to enable retrieval.",
+            exc,
+        )
+        return None
+
+    logger.info("Candidate retrieval enabled from %s", settings.chroma_dir)
+    return pool
+
+
 def create_app() -> FastAPI:
     """Create the FastAPI application with configured routes."""
 
@@ -62,6 +93,7 @@ def create_app() -> FastAPI:
     app.state.plan_store = PlanStore(settings.db_path)
     app.state.job_store = JobStore(settings.db_path)
     app.state.corpus_store = CorpusStore(settings.processed_dir)
+    app.state.candidate_pool = _build_candidate_pool(settings)
 
     llm_client = create_llm_client(settings.anthropic_api_key, settings.llm_model)
     app.state.critic, app.state.chooser = create_critic_and_chooser(
@@ -143,6 +175,7 @@ def create_app() -> FastAPI:
                 output_dir=settings.output_dir,
                 critic=app.state.critic,
                 chooser=app.state.chooser,
+                candidate_pool=app.state.candidate_pool,
             )
         except (KeyError, ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

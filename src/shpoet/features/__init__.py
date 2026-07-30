@@ -5,7 +5,7 @@ Tier-2 (Derived): NLP features - phonetics, meter, syntax, semantics
 Tier-3 (Lazy): On-demand expensive features with caching
 """
 
-from shpoet.features.tier1_raw import apply_tier1_features, extract_tier1_features
+from shpoet.features.tier1_raw import apply_tier1_features, extract_tier1_features, tokenize
 from shpoet.features.tier2_derived import apply_tier2_features, extract_tier2_features
 from shpoet.features.nlp_context import NLPContext
 from shpoet.features.syllables import count_syllables, count_text_syllables
@@ -18,6 +18,7 @@ __all__ = [
     # Tier-1
     "apply_tier1_features",
     "extract_tier1_features",
+    "tokenize",
     # Tier-2
     "apply_tier2_features",
     "extract_tier2_features",

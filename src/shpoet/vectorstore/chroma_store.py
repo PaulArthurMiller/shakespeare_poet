@@ -152,6 +152,31 @@ class ChromaStore:
         logger.info("Query returned %s results", len(results.get("ids", [[]])[0]))
         return results
 
+    def embedding_dimension(self) -> Optional[int]:
+        """Return the dimensionality of the stored vectors, if any exist.
+
+        Used to catch a configuration mismatch up front: querying a 3072-dim
+        collection with an 8-dim stub vector raises deep inside Chroma, once
+        per query, which is easy to mistake for "no results" instead of
+        "wrong embedding settings".
+        """
+
+        try:
+            sample = self._collection.get(limit=1, include=["embeddings"])
+        except Exception as exc:  # noqa: BLE001 - treated as "unknown", never fatal
+            logger.debug("Could not read embedding dimension from '%s': %s", self._collection_name, exc)
+            return None
+
+        embeddings = sample.get("embeddings")
+        if embeddings is None or len(embeddings) == 0:
+            return None
+        return len(embeddings[0])
+
+    def count(self) -> int:
+        """Return the number of documents in the collection."""
+
+        return int(self._collection.count())
+
     def close(self) -> None:
         """Release references to the underlying client."""
 

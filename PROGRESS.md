@@ -311,3 +311,84 @@ are 227-byte, 3-line toy-corpus smoke tests from 07-08, predating the full corpu
   - Then run quality passes and playbacks.
 - Risks/notes:
   - Branch: `claude-vectorstore-retrieval`, cut from `main` @ `c943dfc`.
+
+## 2026-07-30 14:30 — Per-beat candidate retrieval from the vector index
+Closes blocker #1 from the audit above: generation now draws its candidates
+from Chroma instead of walking the whole processed corpus.
+
+- Added `src/shpoet/micro/candidate_pool.py` (`CandidatePool`). For each beat it
+  builds a semantic query from the beat's objective + rhetorical mode + anchor
+  vocabulary (`build_beat_query`), queries all three collections, merges and
+  dedupes by `chunk_id`, drops ids already consumed elsewhere in the play, and
+  returns a deterministically ordered pool sorted by `(distance, chunk_id)`.
+- Added `rehydrate_chunk`, which rebuilds search-ready chunk dicts from Chroma
+  result rows. `text` comes back from the stored document and `tokens` is
+  re-derived (token lists are not scalars, so Chroma drops them from metadata);
+  JSON-encoded fields (`punctuation`, `phonemes`, `pos_tags`) are decoded.
+  **This is what makes the artistic constraints possible at all** — Tier-1 and
+  Tier-2 features are computed at index time and exist nowhere else, so the old
+  JSONL path could never have fed them to scoring.
+- Exposed `tokenize()` publicly in `features/tier1_raw.py` so rehydration derives
+  tokens exactly the way indexing did, rather than diverging on its own split.
+- Added `ChromaStore.embedding_dimension()` and `ChromaStore.count()`.
+- Wired `CandidatePool` through `api/services.generate_play` (new optional
+  `candidate_pool` arg) and `api/main.create_app`. Retrieval is the default path;
+  the full-corpus walk remains as an explicit fallback and now logs a warning
+  explaining that Tier-2 metadata is unavailable on that path.
+- Added `SHPOET_CHROMA_DIR` and `SHPOET_RETRIEVAL_POOL_SIZE` settings
+  (pool size 0 disables retrieval).
+
+**Bug found and fixed while testing:** an embedding-dimension mismatch failed
+silently in the worst possible way. Querying the 3072-dim index with an 8-dim
+stub vector raised inside Chroma once per collection per beat; each beat caught
+it, logged, fell back to an empty pool, and the job completed "successfully"
+with an empty play. `CandidatePool._verify_dimensions()` now checks stored vs.
+configured dimensions at construction and raises with the exact setting to fix.
+`_build_candidate_pool()` in `api/main.py` catches that and degrades to the full
+corpus rather than failing app startup on a fresh clone with no index.
+
+**Test isolation fixed:** `tests/conftest.py` now also redirects
+`SHPOET_CHROMA_DIR` and `SHPOET_OUTPUT_DIR` to a per-test temp directory. The
+API flow test had been writing generated plays into the real `data/output`, and
+once the app opened a pool at startup it would otherwise have queried the real
+447k-chunk production index. `tests/test_api.py::test_plan_approve_generate_flow`
+now builds a real index over the fixture corpus so the flow exercises retrieval
+end to end.
+
+- Verified against the real full-corpus index (`data/chroma`, 447,088 chunks,
+  OpenAI text-embedding-3-large @ 3072):
+  - Opening all three collections: ~5.0s, one time at app startup.
+  - Per-beat query: ~1.2–2.5s, 800 candidates selected from 1,596 retrieved.
+  - Retrieval is on-target. Query "A ruler confronts a mirror that remembers
+    every broken oath / soliloquy / crown mirror oath" returned "As doth a ruler
+    with unlawful oaths" (1H6 5.5), "Is crowned so soon and broke his solemn
+    oath" (3H6 1.4), "Against my crown my oath my dignity" (Err. 1.1), "But now
+    two mirrors of his princely semblance" (R3 2.2).
+  - Tier-2 metadata arrives intact: e.g. `syllable_count=10 iambic_score=0.9
+    stress_pattern=1101010101 rhyme_class=OW_DH_Z`.
+- Full suite green: 126 tests (109 prior + 16 new retrieval tests + 1 rewritten).
+- Next steps:
+  - Wire `macro/guidance.py` to emit `meter_strictness`, `meter_preference`,
+    `length_preference`, `emotion_alignment`/`target_valence`. Now unblocked —
+    the metadata these read is finally present on the chunks.
+  - Dedupe near-identical candidates across collections. The pool currently
+    returns e.g. `..._line101` and `..._line101_p0` — the same words differing
+    only by trailing punctuation. Worse, the reuse lock keys on `chunk_id`, so
+    nothing stops the search from emitting both. Needs normalized-text dedupe in
+    the pool and probably a source-span check in `ReuseLock`.
+  - Tune `pool_size` (currently 800) once the artistic knobs are live; it trades
+    candidate diversity against per-beat search cost.
+  - Call `RhymeConstraint` from the transition/scoring path, or delete the getter.
+  - Recover/regenerate the three missing HTML pages; add a smoke test asserting
+    `GET /`, `/composer`, `/admin` return 200.
+- Risks/notes:
+  - Measured signal quality in the index before relying on it: `iambic_score` is
+    well spread (0.5/0.6/0.333/0.667/0.7 all heavily populated), so the meter
+    knob has real signal to work with. **`emotion_valence` is degenerate** —
+    396,370 of 447,088 chunks (89%) are exactly 0.0, with the remainder almost
+    entirely ±1.0. The keyword lexicon in `features/semantics.py` is too coarse
+    to be worth weighting; turning on `emotion_alignment` will do close to
+    nothing until that extractor is improved. Do not read a null result from the
+    emotion knob as "emotion doesn't help".
+  - Retrieval quality is only as good as the beat objective text the expander
+    writes; thin or generic objectives will retrieve generic material.

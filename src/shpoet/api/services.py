@@ -15,6 +15,7 @@ from shpoet.expander.expander import expand_play_input
 from shpoet.llm.chooser import Chooser
 from shpoet.llm.critic import Critic
 from shpoet.macro.guidance import GuidanceEmitter
+from shpoet.micro.candidate_pool import CandidatePool
 from shpoet.micro.corpus_store import CorpusStore
 from shpoet.scoring.features_for_scoring import compute_anchor_hits
 from shpoet.search.beam_search import BeamSearch
@@ -87,8 +88,16 @@ def generate_play(
     output_dir: Optional[Path] = None,
     critic: Optional[Critic] = None,
     chooser: Optional[Chooser] = None,
+    candidate_pool: Optional[CandidatePool] = None,
 ) -> GenerationRecord:
-    """Generate a play from an approved plan and store the job output."""
+    """Generate a play from an approved plan and store the job output.
+
+    When ``candidate_pool`` is supplied, each beat draws a semantically
+    retrieved pool from the vector index -- which is also the only path that
+    carries Tier-1/Tier-2 metadata into scoring. Without it, generation falls
+    back to walking the whole processed corpus, which is slower and leaves
+    every artistic feature at its default value.
+    """
 
     plan_record = plan_store.get(plan_id)
     if plan_record is None:
@@ -96,16 +105,23 @@ def generate_play(
     if not plan_record.approved:
         raise ValueError(f"Plan not approved: {plan_id}")
 
-    chunks = corpus_store.list_chunks()
-    if not chunks:
-        corpus_store.load()
+    chunks: List[Dict[str, object]] = []
+    if candidate_pool is None:
         chunks = corpus_store.list_chunks()
+        if not chunks:
+            corpus_store.load()
+            chunks = corpus_store.list_chunks()
+        logger.warning(
+            "Generating without a candidate pool: scoring the full %s-chunk corpus "
+            "with no Tier-2 metadata available",
+            len(chunks),
+        )
 
     active_critic = critic if config.use_critic else None
     active_chooser = chooser if config.use_chooser else None
 
     generated = _generate_play_from_plan(
-        plan_record.plan, chunks, config, active_critic, active_chooser
+        plan_record.plan, chunks, config, active_critic, active_chooser, candidate_pool
     )
     job_id = str(uuid.uuid4())
     record = GenerationRecord(
@@ -138,6 +154,7 @@ def _generate_play_from_plan(
     config: GenerationConfig,
     critic: Optional[Critic] = None,
     chooser: Optional[Chooser] = None,
+    candidate_pool: Optional[CandidatePool] = None,
 ) -> GeneratedPlay:
     """Generate play output for the provided plan using beam search."""
 
@@ -150,15 +167,30 @@ def _generate_play_from_plan(
     for act in plan.acts:
         for scene in act.scenes:
             for beat in scene.beats:
-                available_chunks = [
-                    chunk for chunk in chunks if str(chunk.get("chunk_id")) not in used_ids
-                ]
                 guidance = guidance_emitter.guidance_for_beat(beat)
+
+                if candidate_pool is not None:
+                    # Retrieval already drops used ids, so no second filter here.
+                    pool = candidate_pool.for_beat(
+                        beat, guidance.anchor_targets, exclude_ids=used_ids
+                    )
+                    available_chunks = pool.chunks
+                else:
+                    available_chunks = [
+                        chunk for chunk in chunks if str(chunk.get("chunk_id")) not in used_ids
+                    ]
+
                 logger.info(
                     "Generating beat %s with %s available chunks",
                     beat.beat_id,
                     len(available_chunks),
                 )
+                if not available_chunks:
+                    logger.warning("No candidates available for beat %s; skipping", beat.beat_id)
+                    beat_outputs.append(
+                        GeneratedBeat(beat_id=beat.beat_id, line_ids=[], lines=[])
+                    )
+                    continue
                 search = BeamSearch(available_chunks)
                 result = search.run(
                     guidance=guidance,
