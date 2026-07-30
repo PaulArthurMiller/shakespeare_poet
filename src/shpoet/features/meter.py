@@ -210,9 +210,25 @@ def check_meter_adjacency(
         # Same stress level adjacent - disrupts meter
         score = 0.3
     else:
+        # Defensive only: _normalize_stress emits a binary alphabet, so the three
+        # branches above are exhaustive and this is unreachable today. It matters
+        # that it stays unreachable — because scores are limited to {1.0, 0.9, 0.3},
+        # `strictness` has three regimes, not a continuous range. See the
+        # SHPOET_METER_STRICTNESS docs in config/settings.py.
         score = 0.5
 
-    acceptable = score >= (1.0 - strictness)
+    # `strictness` is the acceptance threshold directly: a candidate passes when
+    # its transition score reaches it. Raising strictness therefore prunes more.
+    #
+    # This previously read `score >= (1.0 - strictness)`, which inverted the
+    # parameter against its own docstring — 0.0 rejected everything but a perfect
+    # transition, and 1.0 accepted everything. No test pinned the direction, so
+    # the inversion survived. Reachable scores are 1.0 / 0.9 / 0.5 / 0.3, so:
+    #   <= 0.3  prunes nothing
+    #   0.4-0.5 prunes same-stress clashes only
+    #   0.6-0.9 also prunes neutral transitions
+    #   > 0.9   admits only perfect stressed -> unstressed transitions
+    acceptable = score >= strictness
     return acceptable, score
 
 

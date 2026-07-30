@@ -102,19 +102,63 @@ class TestCheckMeterAdjacency:
         assert acceptable is True
 
     def test_strictness_levels(self) -> None:
-        """Test different strictness levels."""
+        """Raising strictness must reject more, never less.
+
+        This previously asserted nothing and was commented
+        "Implementation-dependent behavior", which is how an inverted
+        comparison (`score >= 1.0 - strictness`) survived: higher strictness
+        was *more* permissive, the opposite of the documented contract.
+        """
+
         prev = "01"  # Ends stressed
-        curr = "10"  # Starts stressed (mediocre transition)
+        curr = "10"  # Starts stressed -> same-stress collision, score 0.3
 
-        # At strictness=0.5, threshold is 0.5
         _, score = check_meter_adjacency(prev, curr, strictness=0.5)
-
-        # Score should be in valid range
         assert 0.0 <= score <= 1.0
 
-        # Very strict should be more likely to reject
-        accept_strict, _ = check_meter_adjacency(prev, curr, strictness=0.9)
-        # Implementation-dependent behavior
+        lenient, _ = check_meter_adjacency(prev, curr, strictness=0.0)
+        strict, _ = check_meter_adjacency(prev, curr, strictness=0.9)
+
+        assert lenient is True, "strictness 0.0 must accept everything"
+        assert strict is False, "strictness 0.9 must reject a same-stress collision"
+
+    def test_strictness_is_monotonic(self) -> None:
+        """Acceptance must never turn back on as strictness rises."""
+
+        prev, curr = "01", "01"  # Perfect transition, score 1.0
+        previously_accepted = True
+
+        for step in range(0, 11):
+            accepted, _ = check_meter_adjacency(prev, curr, strictness=step / 10)
+            assert not (accepted and not previously_accepted), (
+                f"acceptance became more permissive at strictness={step / 10}"
+            )
+            previously_accepted = accepted
+
+    def test_zero_strictness_accepts_worst_transition(self) -> None:
+        """Zero must disable pruning rather than maximise it."""
+
+        accepted, score = check_meter_adjacency("01", "10", strictness=0.0)
+
+        assert accepted is True
+        assert score == pytest.approx(0.3)
+
+    def test_only_three_scores_are_reachable(self) -> None:
+        """Binary stress normalization limits adjacency to three outcomes.
+
+        This is why meter_strictness behaves as three regimes rather than a
+        smooth dial, and it is load-bearing for how the knob is documented and
+        tuned. If normalization ever stops being binary, this test fails and the
+        SHPOET_METER_STRICTNESS guidance needs revisiting.
+        """
+
+        observed = set()
+        for prev in ("00", "01", "10", "11"):
+            for curr in ("00", "01", "10", "11"):
+                _, score = check_meter_adjacency(prev, curr)
+                observed.add(round(score, 3))
+
+        assert observed == {1.0, 0.9, 0.3}
 
 
 class TestGetMeterFeatures:
