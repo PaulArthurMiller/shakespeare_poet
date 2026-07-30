@@ -431,3 +431,69 @@ end to end.
     codebase fails *silently*. A missing metadata key becomes a `0.0` default, a
     dimension mismatch becomes an empty pool, a placeholder returns `passed=True`.
     Every wiring change should land with a test that fails if the wire is cut again.
+
+## 2026-07-30 15:40 — M1: artistic constraint knobs wired and switched on
+Completes BUILD-PLAN.md Milestone 1. `macro/guidance.py` now emits every knob its
+consumers read, so the meter machinery is live for the first time.
+
+- Added `GuidanceKnobs` (frozen dataclass) in `macro/guidance.py` with
+  `from_settings()` and `all_off()`. Held as an explicit value object rather than
+  read from global config inside the emitter, so guidance stays a pure function of
+  its inputs and tests can vary knobs without touching the environment.
+  `all_off()` is the reproducible control group for M3's A/B.
+- `GuidanceEmitter.guidance_for_beat()` now emits `constraints["meter_strictness"]`
+  and `priors["meter_preference" | "length_preference" | "emotion_alignment" |
+  "target_valence"]`, alongside the existing per-beat anchor priors. Knob values
+  are logged per beat.
+- Added five settings fields (`SHPOET_METER_STRICTNESS`, `SHPOET_METER_PREFERENCE`,
+  `SHPOET_LENGTH_PREFERENCE`, `SHPOET_EMOTION_ALIGNMENT`, `SHPOET_TARGET_VALENCE`).
+- Added `tests/test_guidance_knobs.py` (18 tests) covering the full chain: knob
+  emitted → constraint prunes → score moves. Includes a control-group test proving
+  `all_off()` reproduces the old all-zero artistic scoring.
+
+**Bug found and fixed: the meter strictness parameter was inverted.**
+`check_meter_adjacency` computed `acceptable = score >= (1.0 - strictness)`, so
+strictness 0.0 rejected everything but a perfect transition and 1.0 accepted
+everything — exactly backwards from its own docstring and from `MeterConstraint`'s.
+No test pinned the direction: `test_strictness_levels` asserted nothing about
+acceptance and carried the comment "Implementation-dependent behavior". Had this
+shipped, turning the knob "down to be gentle" would have pruned the pool hardest.
+Now `acceptable = score >= strictness`, with monotonicity and direction tests.
+
+**The knob has three regimes, not a smooth range.** `_normalize_stress` emits a
+binary alphabet, so the branches in `check_meter_adjacency` are exhaustive and
+adjacency scores take only {1.0, 0.9, 0.3} — the `else: score = 0.5` branch is
+unreachable (kept as a documented defensive fallback). Measured against the real
+800-chunk retrieved pool, averaged over five different preceding chunks:
+
+| meter_strictness | survivors | pruned on meter |
+|---|---|---|
+| 0.0 (off)        | 797 (99.7%) | 0   |
+| 0.4 – 0.9        | 291 (36.3%) | 507 |
+| 1.0              | 174 (21.8%) | 623 |
+
+Default set to **0.4**, not the 0.3 originally planned: with the inversion fixed,
+0.3 is the minimum reachable score and would prune nothing, making the constraint
+inert — the exact failure mode M1 exists to end. 0.4 is the mildest setting that
+does anything, and ~290 candidates per beat is ample for beam search.
+
+- `emotion_alignment` ships at **0.0 (off)**, deliberately. With `target_valence`
+  at 0.0 the scoring term pays `(1.0 - |0.0 - valence|) * weight`, so every neutral
+  line scores full marks and every emotionally marked line scores zero — given 89%
+  of the corpus is exactly 0.0, enabling it would actively reward blandness. Wired
+  for completeness; leave off until `features/semantics.py` is fixed (M7).
+- Full suite green: 145 tests.
+- Next steps:
+  - M2 (quote integrity): `ReuseLock` keys on `chunk_id`, so overlapping chunks
+    from one source line can both be used. Fix before any quality measurement.
+- Risks/notes:
+  - Branch: `claude-guidance-knobs`, cut from `main` @ `6ac6c82`.
+  - **Per-beat knob modulation was deliberately not built.** BUILD-PLAN M1
+    suggested letting `rhetorical_mode` modulate the knobs, but
+    `expander/expander.py:33` hardcodes `rhetorical_mode = "reflection"` for every
+    beat, and `_build_scene_plan` emits exactly one beat per scene. A modulation
+    table would be branches that can never execute — the same dead-code trap the
+    plan warns about. Revisit when the expander produces varied modes; that is
+    also a real limit on M4's tuning surface and probably deserves its own
+    milestone.
+

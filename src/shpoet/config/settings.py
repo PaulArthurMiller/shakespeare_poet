@@ -36,6 +36,74 @@ class Settings(BaseSettings):
         ),
         validation_alias="SHPOET_RETRIEVAL_POOL_SIZE",
     )
+    # Artistic constraint knobs.
+    #
+    # These are engineering knobs, not user-facing sliders (ARCHITECTURE.md §9).
+    # They live in config rather than being hardcoded so that setting them all to
+    # zero reproduces the pre-M1 behaviour exactly — that is the control group for
+    # any quality comparison.
+    meter_strictness: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Acceptance threshold for iambic flow between adjacent chunks; higher "
+            "prunes more. Because normalized stress is binary, adjacency scores "
+            "take only three values (1.0, 0.9, 0.3), so this knob has exactly "
+            "three regimes rather than a smooth range:\n"
+            "  0.0-0.3  off: nothing is pruned on meter\n"
+            "  0.4-0.9  reject same-stress collisions (measured: ~36% of a real "
+            "800-chunk pool survives)\n"
+            "  0.95+    accept only perfect stressed->unstressed transitions "
+            "(measured: ~22% survives)\n"
+            "0.4 is the default: it enforces real metrical flow while leaving "
+            "roughly 290 candidates per beat, which is ample for beam search. "
+            "Going to 0.95+ starves the pool and drives rollback loops."
+        ),
+        validation_alias="SHPOET_METER_STRICTNESS",
+    )
+    meter_preference: float = Field(
+        default=1.0,
+        ge=0.0,
+        description=(
+            "Scoring weight on a candidate's iambic_score (0.0-1.0). At 1.0 a "
+            "perfectly iambic line is worth roughly one anchor hit."
+        ),
+        validation_alias="SHPOET_METER_PREFERENCE",
+    )
+    length_preference: float = Field(
+        default=0.1,
+        ge=0.0,
+        description=(
+            "Scoring penalty per syllable of deviation from the 10-syllable "
+            "pentameter target. 0.1 matches the value ScoringEngine used implicitly."
+        ),
+        validation_alias="SHPOET_LENGTH_PREFERENCE",
+    )
+    emotion_alignment: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "Scoring weight on emotional valence match. DEFAULTS TO OFF, and that "
+            "is deliberate: emotion_valence is degenerate across the corpus (89% of "
+            "chunks are exactly 0.0), so with target_valence at 0.0 this term pays "
+            "every neutral line and pays nothing to the emotionally marked ones — "
+            "it would actively reward blandness. Leave off until features/semantics.py "
+            "produces a real distribution (BUILD-PLAN.md M7)."
+        ),
+        validation_alias="SHPOET_EMOTION_ALIGNMENT",
+    )
+    target_valence: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Emotional valence the scorer aims for, -1.0 (bleak) to 1.0 (bright). "
+            "Only has effect when emotion_alignment is above zero."
+        ),
+        validation_alias="SHPOET_TARGET_VALENCE",
+    )
+
     db_path: str = Field(
         default=":memory:",
         description="SQLite database path. Set SHPOET_DB_PATH to a file path for persistent storage.",
