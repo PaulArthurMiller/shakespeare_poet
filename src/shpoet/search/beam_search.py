@@ -22,12 +22,29 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SearchResult:
-    """Result bundle for beam search."""
+    """Result bundle for beam search.
+
+    The counters after ``critic_reports`` are search-health telemetry, not
+    outputs. They exist because a beat can return a perfectly reasonable-looking
+    path having thrashed through dozens of dead ends to get there, and the
+    evaluation harness (BUILD-PLAN.md M3) needs to see that -- particularly as
+    span-based reuse locking shrinks the effective corpus through later acts.
+    They default to zero so callers that build a SearchResult by hand (tests,
+    stubs) do not have to know about them.
+    """
 
     best_path: List[str]
     best_score: float
     checkpoints_used: int
     critic_reports: List[CriticReport]
+    # Beam expansions that produced no legal continuation at all.
+    dead_ends: int = 0
+    # Times the search fell back to a checkpoint because every beam died.
+    rollbacks: int = 0
+    # Deepest depth actually reached; below max_length means an early stop.
+    depth_reached: int = 0
+    # Depths abandoned with no checkpoint to roll back to.
+    exhausted: bool = False
 
 
 class BeamSearch:
@@ -63,8 +80,13 @@ class BeamSearch:
         best_path: List[str] = []
         best_score = float("-inf")
         critic_reports: List[CriticReport] = []
+        dead_ends = 0
+        rollbacks = 0
+        depth_reached = 0
+        exhausted = False
 
         for depth in range(1, max_length + 1):
+            depth_reached = depth
             candidates: List[BeamState] = []
             failed_paths: List[List[str]] = []
 
@@ -78,6 +100,7 @@ class BeamSearch:
                 )
 
                 if not result.candidates:
+                    dead_ends += 1
                     failed_paths.append(list(beam.path_ids))
                     continue
 
@@ -100,8 +123,10 @@ class BeamSearch:
             if not candidates:
                 checkpoint = checkpoint_manager.latest()
                 if checkpoint:
+                    rollbacks += 1
                     beams = self._rollback.rollback(checkpoint, avoid_memory, failed_paths)
                     continue
+                exhausted = True
                 logger.warning("Beam search terminated early at depth %s", depth)
                 break
 
@@ -130,12 +155,20 @@ class BeamSearch:
                     )
                     critic_reports.append(report)
 
-        logger.info("Beam search completed with best score %s", best_score)
+        logger.info(
+            "Beam search completed with best score %s "
+            "(depth=%d dead_ends=%d rollbacks=%d exhausted=%s)",
+            best_score, depth_reached, dead_ends, rollbacks, exhausted,
+        )
         return SearchResult(
             best_path=best_path,
             best_score=best_score,
             checkpoints_used=checkpoint_manager.count(),
             critic_reports=critic_reports,
+            dead_ends=dead_ends,
+            rollbacks=rollbacks,
+            depth_reached=depth_reached,
+            exhausted=exhausted,
         )
 
     def _build_transition_engine(self, used_ids: List[str]) -> TransitionEngine:
