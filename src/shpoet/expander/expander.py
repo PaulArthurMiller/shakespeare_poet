@@ -25,11 +25,19 @@ from shpoet.expander.validators import validate_design_brief, validate_play_plan
 logger = logging.getLogger(__name__)
 
 
-def _build_beat_plan(scene: SceneInput, index: int) -> BeatPlan:
-    """Build a single beat plan entry for a scene."""
+def _build_beat_plan(scene: SceneInput, index: int, total: int) -> BeatPlan:
+    """Build a single beat plan entry for a scene.
+
+    ``total`` distinguishes each beat's objective when a scene expands to more
+    than one beat -- otherwise every beat would issue an identical retrieval
+    query and draw from the same narrow slice of the candidate pool.
+    """
 
     beat_id = f"act{scene.act}_scene{scene.scene}_beat{index}"
-    objective = f"Advance the scene intent: {scene.summary}"
+    if total > 1:
+        objective = f"Advance the scene intent (beat {index} of {total}): {scene.summary}"
+    else:
+        objective = f"Advance the scene intent: {scene.summary}"
     rhetorical_mode = "reflection"
     return BeatPlan(
         beat_id=beat_id,
@@ -40,11 +48,14 @@ def _build_beat_plan(scene: SceneInput, index: int) -> BeatPlan:
 
 
 def _build_scene_plan(scene: SceneInput) -> ScenePlan:
-    """Build a ScenePlan from a SceneInput entry."""
+    """Build a ScenePlan from a SceneInput entry, honoring its beat_count."""
 
-    beat = _build_beat_plan(scene, index=1)
+    beats = [
+        _build_beat_plan(scene, index=index, total=scene.beat_count)
+        for index in range(1, scene.beat_count + 1)
+    ]
     scene_id = f"act{scene.act}_scene{scene.scene}"
-    return ScenePlan(scene_id=scene_id, act=scene.act, scene=scene.scene, beats=[beat])
+    return ScenePlan(scene_id=scene_id, act=scene.act, scene=scene.scene, beats=beats)
 
 
 def _build_act_plans(scenes: List[SceneInput]) -> List[ActPlan]:
@@ -63,15 +74,20 @@ def _build_act_plans(scenes: List[SceneInput]) -> List[ActPlan]:
     return act_plans
 
 
-def _map_beats_by_act(acts: List[ActPlan]) -> Dict[int, List[str]]:
-    """Map beat identifiers grouped by act for anchor placement planning."""
+def _map_beats_by_scene(acts: List[ActPlan]) -> Dict[str, List[str]]:
+    """Map beat identifiers grouped by scene for anchor placement planning.
 
-    beat_ids_by_act: Dict[int, List[str]] = defaultdict(list)
+    Grouped by scene rather than act: an anchor obligation must land on at
+    least one beat of *every* scene (see validators._ensure_non_empty_beats),
+    and an act can hold more than one scene.
+    """
+
+    beat_ids_by_scene: Dict[str, List[str]] = defaultdict(list)
     for act in acts:
         for scene in act.scenes:
             for beat in scene.beats:
-                beat_ids_by_act[act.act].append(beat.beat_id)
-    return beat_ids_by_act
+                beat_ids_by_scene[scene.scene_id].append(beat.beat_id)
+    return beat_ids_by_scene
 
 
 def _apply_beat_obligations(
@@ -95,8 +111,8 @@ def expand_play_input(user_input: UserPlayInput) -> Tuple[PlayDesignBrief, PlayP
     logger.info("Generating play plan %s", plan_id)
 
     act_plans = _build_act_plans(user_input.scenes)
-    beat_ids_by_act = _map_beats_by_act(act_plans)
-    anchors, obligations = plan_anchors(user_input, beat_ids_by_act)
+    beat_ids_by_scene = _map_beats_by_scene(act_plans)
+    anchors, obligations = plan_anchors(user_input, beat_ids_by_scene)
     _apply_beat_obligations(act_plans, obligations)
 
     plan = PlayPlan(plan_id=plan_id, title=user_input.title, acts=act_plans, anchors=anchors)
