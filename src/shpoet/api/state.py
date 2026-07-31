@@ -32,6 +32,10 @@ class GenerationRecord:
     markdown: str = ""
     play_json: dict = field(default_factory=dict)
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Serialized IntegrityReport (see validation/quote_integrity.py). Empty for
+    # runs recorded before quote integrity was validated -- an empty dict means
+    # "not checked", which is not the same as "passed".
+    quote_integrity: dict = field(default_factory=dict)
 
 
 class PlanStore:
@@ -128,16 +132,20 @@ class JobStore:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS jobs (
-                job_id       TEXT PRIMARY KEY,
-                plan_id      TEXT NOT NULL,
-                status       TEXT NOT NULL,
-                output_lines TEXT NOT NULL DEFAULT '[]',
-                markdown     TEXT NOT NULL DEFAULT '',
-                play_json    TEXT NOT NULL DEFAULT '{}',
-                updated_at   TEXT NOT NULL
+                job_id          TEXT PRIMARY KEY,
+                plan_id         TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                output_lines    TEXT NOT NULL DEFAULT '[]',
+                markdown        TEXT NOT NULL DEFAULT '',
+                play_json       TEXT NOT NULL DEFAULT '{}',
+                updated_at      TEXT NOT NULL,
+                quote_integrity TEXT NOT NULL DEFAULT '{}'
             )
             """
         )
+        # CREATE TABLE IF NOT EXISTS does nothing to a database created before
+        # this column existed, so existing job stores are migrated explicitly.
+        self._add_missing_column("jobs", "quote_integrity", "TEXT NOT NULL DEFAULT '{}'")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS line_marks (
@@ -167,12 +175,22 @@ class JobStore:
         )
         self._conn.commit()
 
+    def _add_missing_column(self, table: str, column: str, definition: str) -> None:
+        """Add a column to an existing table when a prior schema version lacks it."""
+        cursor = self._conn.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        if column in existing:
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        self._conn.commit()
+
     def save(self, record: GenerationRecord) -> None:
         """Persist a generation record, replacing any existing row with the same job_id."""
         self._conn.execute(
             "INSERT OR REPLACE INTO jobs "
-            "(job_id, plan_id, status, output_lines, markdown, play_json, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(job_id, plan_id, status, output_lines, markdown, play_json, updated_at, "
+            "quote_integrity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.job_id,
                 record.plan_id,
@@ -181,20 +199,13 @@ class JobStore:
                 record.markdown,
                 json.dumps(record.play_json),
                 record.updated_at.isoformat(),
+                json.dumps(record.quote_integrity),
             ),
         )
         self._conn.commit()
 
-    def get(self, job_id: str) -> Optional[GenerationRecord]:
-        """Retrieve a generation record by identifier."""
-        cursor = self._conn.execute(
-            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at "
-            "FROM jobs WHERE job_id = ?",
-            (job_id,),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return None
+    def _record_from_row(self, row: tuple) -> GenerationRecord:
+        """Build a GenerationRecord from a jobs row in the canonical column order."""
         return GenerationRecord(
             job_id=row[0],
             plan_id=row[1],
@@ -203,30 +214,30 @@ class JobStore:
             markdown=row[4],
             play_json=json.loads(row[5]),
             updated_at=datetime.fromisoformat(row[6]),
+            quote_integrity=json.loads(row[7] or "{}"),
         )
+
+    def get(self, job_id: str) -> Optional[GenerationRecord]:
+        """Retrieve a generation record by identifier."""
+        cursor = self._conn.execute(
+            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at, "
+            "quote_integrity FROM jobs WHERE job_id = ?",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._record_from_row(row)
 
 
     def list_recent(self, limit: int = 50) -> List[GenerationRecord]:
         """Return recent generation jobs for the composer library."""
         cursor = self._conn.execute(
-            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at "
-            "FROM jobs ORDER BY updated_at DESC LIMIT ?",
+            "SELECT job_id, plan_id, status, output_lines, markdown, play_json, updated_at, "
+            "quote_integrity FROM jobs ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         )
-        records: List[GenerationRecord] = []
-        for row in cursor.fetchall():
-            records.append(
-                GenerationRecord(
-                    job_id=row[0],
-                    plan_id=row[1],
-                    status=row[2],
-                    output_lines=json.loads(row[3]),
-                    markdown=row[4],
-                    play_json=json.loads(row[5]),
-                    updated_at=datetime.fromisoformat(row[6]),
-                )
-            )
-        return records
+        return [self._record_from_row(row) for row in cursor.fetchall()]
 
     def save_line_mark(self, mark: LineMarkRecord) -> None:
         """Persist or update a review mark for one generated line."""

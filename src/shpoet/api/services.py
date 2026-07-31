@@ -17,8 +17,10 @@ from shpoet.llm.critic import Critic
 from shpoet.macro.guidance import GuidanceEmitter
 from shpoet.micro.candidate_pool import CandidatePool
 from shpoet.micro.corpus_store import CorpusStore
+from shpoet.micro.reuse_lock import ReuseLock
 from shpoet.scoring.features_for_scoring import compute_anchor_hits
 from shpoet.search.beam_search import BeamSearch
+from shpoet.validation.quote_integrity import IntegrityReport, check_used_chunks
 
 from shpoet.api.models import GenerationConfig
 from shpoet.api.state import GenerationRecord, JobStore, PlanRecord, PlanStore
@@ -44,6 +46,7 @@ class GeneratedPlay:
     beat_outputs: List[GeneratedBeat]
     markdown: str
     play_json: Dict[str, object]
+    quote_integrity: IntegrityReport
 
 
 def create_plan(user_input: UserPlayInput, plan_store: PlanStore) -> PlanRecord:
@@ -132,9 +135,17 @@ def generate_play(
         markdown=generated.markdown,
         play_json=generated.play_json,
         updated_at=datetime.now(timezone.utc),
+        quote_integrity=generated.quote_integrity.to_dict(),
     )
     job_store.save(record)
     logger.info("Generation job %s completed for plan %s", job_id, plan_id)
+    # Recorded, not raised: a play that violates quote integrity is still worth
+    # reading and diagnosing, and the violations name exactly which spans clash.
+    if not generated.quote_integrity.passed:
+        logger.error(
+            "Generation job %s failed quote integrity: %s",
+            job_id, generated.quote_integrity.describe(),
+        )
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +170,11 @@ def _generate_play_from_plan(
     """Generate play output for the provided plan using beam search."""
 
     guidance_emitter = GuidanceEmitter(plan.anchors)
-    used_ids: set[str] = set()
+    # One lock for the whole play: it holds the source word spans already
+    # quoted, so a later beat cannot re-quote words an earlier beat spent --
+    # whichever chunker produced the overlapping candidate.
+    reuse_lock = ReuseLock()
+    used_chunks: List[Tuple[str, Dict[str, object]]] = []
     anchors_seen: List[str] = []
     beat_outputs: List[GeneratedBeat] = []
     output_lines: List[str] = []
@@ -170,14 +185,14 @@ def _generate_play_from_plan(
                 guidance = guidance_emitter.guidance_for_beat(beat)
 
                 if candidate_pool is not None:
-                    # Retrieval already drops used ids, so no second filter here.
+                    # Retrieval already drops used spans, so no second filter here.
                     pool = candidate_pool.for_beat(
-                        beat, guidance.anchor_targets, exclude_ids=used_ids
+                        beat, guidance.anchor_targets, reuse_lock=reuse_lock
                     )
                     available_chunks = pool.chunks
                 else:
                     available_chunks = [
-                        chunk for chunk in chunks if str(chunk.get("chunk_id")) not in used_ids
+                        chunk for chunk in chunks if not reuse_lock.is_used(chunk)
                     ]
 
                 logger.info(
@@ -219,9 +234,12 @@ def _generate_play_from_plan(
                         chooser=chooser,
                     )
 
-                beat_lines, beat_line_ids = _render_lines_from_chunks(result.best_path, available_chunks)
+                beat_lines, beat_line_ids, beat_chunks = _render_lines_from_chunks(
+                    result.best_path, available_chunks
+                )
                 output_lines.extend(beat_lines)
-                used_ids.update(beat_line_ids)
+                reuse_lock.mark_used_many(beat_chunks)
+                used_chunks.extend((beat.beat_id, chunk) for chunk in beat_chunks)
                 anchors_seen.extend(
                     _extract_anchor_hits_for_lines(available_chunks, beat_line_ids, guidance.anchor_targets)
                 )
@@ -229,25 +247,44 @@ def _generate_play_from_plan(
                     GeneratedBeat(beat_id=beat.beat_id, line_ids=beat_line_ids, lines=beat_lines)
                 )
 
+    # Independent check on the finished artifact: the search believed every one
+    # of these was legal, and this is what catches it when that belief is wrong.
+    integrity = check_used_chunks(used_chunks)
+    if reuse_lock.unverifiable_count:
+        logger.warning(
+            "%d selected chunks carried no source span; the no-reuse rule was "
+            "enforced by chunk_id alone for those",
+            reuse_lock.unverifiable_count,
+        )
+
     markdown = _render_markdown(plan, beat_outputs)
     play_json = _render_play_json(plan, beat_outputs)
+    play_json["quote_integrity"] = integrity.to_dict()
     return GeneratedPlay(
         output_lines=output_lines,
         beat_outputs=beat_outputs,
         markdown=markdown,
         play_json=play_json,
+        quote_integrity=integrity,
     )
 
 
 def _render_lines_from_chunks(
     line_ids: List[str],
     chunks: List[Dict[str, object]],
-) -> Tuple[List[str], List[str]]:
-    """Render line text for selected chunk identifiers."""
+) -> Tuple[List[str], List[str], List[Dict[str, object]]]:
+    """Render line text for selected chunk identifiers.
+
+    Returns the rendered lines, the ids that actually resolved, and the chunk
+    dicts behind them. The chunks are returned because the reuse lock and the
+    integrity validator both need the provenance on them -- an id alone cannot
+    say which source words a line spent.
+    """
 
     chunk_map = {str(chunk.get("chunk_id")): chunk for chunk in chunks}
     lines: List[str] = []
     resolved_ids: List[str] = []
+    resolved_chunks: List[Dict[str, object]] = []
     for line_id in line_ids:
         chunk = chunk_map.get(line_id)
         if not chunk:
@@ -257,7 +294,8 @@ def _render_lines_from_chunks(
             continue
         lines.append(text)
         resolved_ids.append(line_id)
-    return lines, resolved_ids
+        resolved_chunks.append(chunk)
+    return lines, resolved_ids, resolved_chunks
 
 
 def _extract_anchor_hits_for_lines(

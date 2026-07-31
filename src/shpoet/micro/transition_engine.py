@@ -65,7 +65,9 @@ class TransitionEngine:
             if not chunk_id:
                 continue
 
-            if self._reuse_lock.is_used(chunk_id):
+            # Span-aware: prunes chunks whose source words are already quoted,
+            # not just chunks with an already-used id.
+            if self._reuse_lock.is_used(chunk):
                 pruned.setdefault("reuse", []).append(chunk_id)
                 continue
 

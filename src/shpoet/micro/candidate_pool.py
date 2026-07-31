@@ -24,6 +24,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 from shpoet.common.types import BeatPlan
 from shpoet.features.tier1_raw import tokenize
+from shpoet.micro.reuse_lock import ReuseLock
 from shpoet.vectorstore.chroma_store import ChromaStore
 
 
@@ -48,12 +49,28 @@ class PoolResult:
     requested: int
     retrieved: int
     excluded: int
+    duplicates: int = 0
 
     @property
     def size(self) -> int:
         """Number of usable candidates in the pool."""
 
         return len(self.chunks)
+
+
+def normalize_for_dedupe(text: str) -> str:
+    """Reduce chunk text to the words it quotes, for cross-collection dedupe.
+
+    The three collections cut overlapping text out of the same lines, so the
+    pool routinely retrieves ``..._line101`` and ``..._line101_p0`` -- identical
+    words differing only by trailing punctuation and capitalisation.  Both would
+    occupy pool slots, and (before span-based locking) both could be selected.
+
+    Tokenizing with the indexer's own tokenizer keeps this in step with how
+    ``tokens`` was derived at index time rather than inventing a second rule.
+    """
+
+    return " ".join(tokenize(text)).lower()
 
 
 def build_beat_query(beat: BeatPlan, anchor_targets: Iterable[str]) -> str:
@@ -209,23 +226,25 @@ class CandidatePool:
         self,
         beat: BeatPlan,
         anchor_targets: Iterable[str],
-        exclude_ids: Optional[Set[str]] = None,
+        reuse_lock: Optional[ReuseLock] = None,
     ) -> PoolResult:
         """Retrieve the candidate pool for a single beat.
 
         Args:
             beat: The beat being generated; supplies the semantic query.
             anchor_targets: Anchor vocabulary for this beat, folded into the query.
-            exclude_ids: Chunk ids already consumed elsewhere in the play. These
-                are filtered out here so the no-reuse rule does not silently eat
-                the whole pool inside the search loop.
+            reuse_lock: The play-level lock holding everything already quoted.
+                Candidates whose source words it covers are dropped here so the
+                no-reuse rule does not silently eat the pool inside the search
+                loop -- and so the pool is not padded with chunks that are cut
+                from lines the play has already spent.
 
         Returns:
-            A PoolResult holding search-ready chunk dicts, deduped across
-            collections and deterministically ordered by (distance, chunk_id).
+            A PoolResult holding search-ready chunk dicts, deduped by chunk id
+            and by normalized text, deterministically ordered by
+            (distance, chunk_id).
         """
 
-        excluded_ids = exclude_ids or set()
         query_text = build_beat_query(beat, anchor_targets)
 
         # Split the budget across collections, with headroom for exclusions.
@@ -234,8 +253,12 @@ class CandidatePool:
 
         scored: List[tuple[float, str, Dict[str, object]]] = []
         seen_ids: Set[str] = set()
+        # Normalized text -> index into `scored`, so a later, closer duplicate
+        # can replace an earlier one instead of both taking a slot.
+        seen_texts: Dict[str, int] = {}
         retrieved = 0
         excluded_hits = 0
+        duplicate_hits = 0
 
         for name, store in self._stores.items():
             try:
@@ -259,9 +282,6 @@ class CandidatePool:
 
             for position, chunk_id in enumerate(ids):
                 chunk_id = str(chunk_id)
-                if chunk_id in excluded_ids:
-                    excluded_hits += 1
-                    continue
                 if chunk_id in seen_ids:
                     continue
 
@@ -273,8 +293,27 @@ class CandidatePool:
                 # last rather than crashing the beat.
                 distance = float(distances[position]) if position < len(distances) else float("inf")
 
+                chunk = rehydrate_chunk(chunk_id, document, metadata)
+                if reuse_lock is not None and reuse_lock.is_used(chunk):
+                    excluded_hits += 1
+                    continue
+
                 seen_ids.add(chunk_id)
-                scored.append((distance, chunk_id, rehydrate_chunk(chunk_id, document, metadata)))
+                row = (distance, chunk_id, chunk)
+
+                normalized = normalize_for_dedupe(document)
+                existing = seen_texts.get(normalized)
+                if existing is None:
+                    seen_texts[normalized] = len(scored)
+                    scored.append(row)
+                    continue
+
+                # Same words already in the pool: keep whichever is closer to the
+                # query, breaking ties on chunk_id so the choice is reproducible.
+                duplicate_hits += 1
+                incumbent = scored[existing]
+                if (row[0], row[1]) < (incumbent[0], incumbent[1]):
+                    scored[existing] = row
 
         # chunk_id breaks distance ties so the pool -- and therefore generation --
         # is reproducible across runs.
@@ -283,13 +322,15 @@ class CandidatePool:
 
         if not chunks:
             logger.warning(
-                "Empty candidate pool for beat %s (retrieved=%d, excluded=%d, query=%r)",
-                beat.beat_id, retrieved, excluded_hits, query_text,
+                "Empty candidate pool for beat %s (retrieved=%d, excluded=%d, "
+                "duplicates=%d, query=%r)",
+                beat.beat_id, retrieved, excluded_hits, duplicate_hits, query_text,
             )
         else:
             logger.info(
-                "Beat %s pool: %d candidates from %d retrieved (%d excluded as used)",
-                beat.beat_id, len(chunks), retrieved, excluded_hits,
+                "Beat %s pool: %d candidates from %d retrieved "
+                "(%d excluded as used, %d duplicate texts collapsed)",
+                beat.beat_id, len(chunks), retrieved, excluded_hits, duplicate_hits,
             )
 
         return PoolResult(
@@ -298,6 +339,7 @@ class CandidatePool:
             requested=self._pool_size,
             retrieved=retrieved,
             excluded=excluded_hits,
+            duplicates=duplicate_hits,
         )
 
     def close(self) -> None:

@@ -54,10 +54,11 @@ def _build_guidance(required_anchor_count: int) -> GuidanceProfile:
 def test_transition_engine_enforces_reuse_and_anchor() -> None:
     """Ensure reuse lock and anchor constraint prune candidates."""
 
+    chunks = _build_chunks()
     reuse_lock = ReuseLock()
-    reuse_lock.mark_used("c2")
+    reuse_lock.mark_used(chunks[1])  # c2
 
-    engine = TransitionEngine(_build_chunks(), reuse_lock)
+    engine = TransitionEngine(chunks, reuse_lock)
     guidance = _build_guidance(required_anchor_count=1)
 
     result = engine.enumerate_candidates(guidance, anchors_seen=[], previous_chunk_id="c2")

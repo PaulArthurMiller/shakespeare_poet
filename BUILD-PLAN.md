@@ -353,9 +353,12 @@ exclusive.
 - ⚠ Span locking shrinks the effective corpus faster than chunk locking did —
   every phrase and fragment drawn from a used line dies with it. Expect more
   dead-ends; may require raising `pool_size`.
+  **Measured (2026-07-31): ~2.4 candidates lost per chunk consumed, vs. 1.0 for
+  id locking. Mild at pool_size 800. Recheck rollback counts in later acts in M4.**
 - ? Does a *sonnet* line and a *play* line that happen to share text count as
   reuse? They have different `line_id`s, so the span rule says no. Confirm that
   matches intent, and note the decision in PROGRESS.md.
+  **Resolved: not reuse.** Different `line_id`s are different places in the canon.
 
 **Estimate:** 1–2 sessions
 
@@ -595,7 +598,7 @@ SHPOET_OUTPUT_DIR            data/output
 
 ## 9) Status
 
-- **Current milestone:** 1 — Turn on the artistic knobs (not started)
-- **In flight:** PR #23 (`claude-vectorstore-retrieval`) — per-beat retrieval,
-  awaiting review. **M1 builds on it; merge first.**
-- **Last updated:** 2026-07-30
+- **M1 — Turn on the artistic knobs:** complete (PR #25, merged).
+- **M2 — Quote integrity:** complete (branch `claude-quote-integrity`).
+- **Current milestone:** 3 — Real evaluation harness (not started)
+- **Last updated:** 2026-07-31
