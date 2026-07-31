@@ -114,6 +114,15 @@ class Settings(BaseSettings):
         description="Directory for exported play files. Disabled when unset.",
         validation_alias="SHPOET_OUTPUT_DIR",
     )
+    eval_dir: Path = Field(
+        default=Path("data/eval"),
+        description=(
+            "Directory for persisted evaluation scorecards written by the replay "
+            "suite. Kept separate from output_dir: those are plays to read, these "
+            "are measurements to compare across runs."
+        ),
+        validation_alias="SHPOET_EVAL_DIR",
+    )
 
     # LLM (Anthropic — critic & chooser)
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")

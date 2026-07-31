@@ -599,6 +599,15 @@ SHPOET_OUTPUT_DIR            data/output
 ## 9) Status
 
 - **M1 — Turn on the artistic knobs:** complete (PR #25, merged).
-- **M2 — Quote integrity:** complete (branch `claude-quote-integrity`).
-- **Current milestone:** 3 — Real evaluation harness (not started)
+- **M2 — Quote integrity:** complete (PR #26, merged).
+- **M3 — Real evaluation harness:** complete (branch `claude-eval-harness`).
+- **Current milestone:** 4 — First quality runs and tuning (not started)
 - **Last updated:** 2026-07-31
+
+> ⚠ **M4 is blocked on a planning bug found during M3.** An act with more than
+> one scene cannot be planned: `plan_anchors` attaches an obligation to the first
+> beat of each *act*, `validate_play_plan` requires *every* beat to carry one, so
+> `expand_play_input` raises `PlanInvalidError`. A five-act play will hit this
+> immediately. Fixing it needs a decision about where anchors belong — see
+> PROGRESS.md 2026-07-31 16:40. M3's scenarios work around it with one scene per
+> act.

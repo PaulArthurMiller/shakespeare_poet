@@ -103,11 +103,36 @@ curl "http://localhost:8000/generate/<JOB_ID>"
 curl "http://localhost:8000/export/<JOB_ID>"
 ```
 
-## Run the replay suite
+## Evaluate generation quality
+
+The replay suite runs fixed scenarios end to end, scores each one, and checks
+the scorecard against thresholds the scenario declares. It exits non-zero when
+any scenario fails, so it can gate a build.
 
 ```bash
-python -m shpoet.learning.replay_suite
+python -m shpoet.learning.replay_suite                  # all scenarios, no critic
+python -m shpoet.learning.replay_suite --ab             # knobs off vs. on, one command
+python -m shpoet.learning.replay_suite --critic         # enable the critic (paid API calls)
+python -m shpoet.learning.replay_suite --scenario mirror-soliloquy
 ```
+
+Scorecards are written to `data/eval/` (`SHPOET_EVAL_DIR`), named for the
+scenario, the arm, and a hash of the run's configuration — so rerunning the same
+experiment overwrites its own card while a different configuration gets its own.
+
+To score a play that was generated earlier, resolving its stored chunk ids back
+into chunks first:
+
+```bash
+python -m shpoet.scripts.score_play data/output/<JOB_ID>.json
+python -m shpoet.scripts.score_play data/output/<JOB_ID>.json --plan plan.json
+python -m shpoet.scripts.score_play data/output/<JOB_ID>.json --no-index
+```
+
+Tier-1 and Tier-2 features are computed at index time and stored only in Chroma,
+so `--no-index` resolves from `data/processed/` instead and reports meter and
+line length as **unmeasured** rather than zero. Anchor coverage needs the plan's
+obligations, which the export does not carry — pass `--plan` to measure it.
 
 ## Run tests
 

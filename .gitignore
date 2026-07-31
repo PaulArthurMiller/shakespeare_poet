@@ -56,3 +56,14 @@ htmlcov/
 *.xml
 # NOTE: do not add a blanket `*.html` here — it silently excluded the frontend
 # pages in src/shpoet/api/static/. Coverage HTML is already covered by htmlcov/.
+
+# Generated data artifacts. data/raw/ and data/archaic_pronunciations.json are
+# inputs and stay tracked; everything below is rebuildable output. data/chroma
+# alone is ~7.5 GB, so leaving these merely untracked is a hazard — one
+# `git add -A` away from an unrecoverable commit.
+data/chroma/
+data/processed/
+data/output/
+data/eval/
+*.db
+*.sqlite3

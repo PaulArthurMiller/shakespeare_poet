@@ -578,3 +578,107 @@ rollback counts climb in later acts during M4.
     chunk ids resolved back to chunks first; `check_quote_integrity()` accepts
     the resulting usages, but no resolver is written yet.
 
+## 2026-07-31 16:40 — M3: a real evaluation harness
+Completes BUILD-PLAN.md Milestone 3. `learning/replay_suite.py` no longer lies,
+and there is now a ruler to measure M1 and M2 against.
+
+**What was wrong.** `run_scenario()` logged a warning and returned
+`passed=True` unconditionally. A green suite was evidence of nothing while
+looking exactly like a suite that checked something — the most expensive kind
+of wrong, because it consumes the attention a real check would have earned.
+Replaced, not extended.
+
+- Added `learning/metrics.py`: anchor coverage (per beat, per act), quote
+  integrity, meter conformity, line length against the pentameter target,
+  source diversity, and search health, assembled into a `Scorecard`.
+- Added `learning/play_run.py`: normalizes a live run and an exported play into
+  one shape, so a metric never has to know which it was handed.
+- Added `learning/eval_store.py`: scorecards persist to `data/eval/` named
+  `<scenario>-<arm>.<signature>.json`, where the signature hashes the run's
+  *inputs* (config + knobs). The same experiment overwrites itself; a different
+  configuration gets its own file. Timestamping instead would fill the directory
+  with runs nobody could tell apart.
+- Added `scripts/score_play.py` — scores a play already sitting in
+  `data/output/`, which is what the resolver below was for.
+- `BeamSearch` now reports `dead_ends`, `rollbacks`, `depth_reached` and
+  `exhausted`; `services` folds those into a `BeatSearchStats` per beat and onto
+  the exported play as `search_health`. None of it is recoverable from the verse.
+- `generate_play_from_plan` is public and takes explicit `knobs`, which is what
+  makes the A/B possible — `GuidanceKnobs.all_off()` is the pre-M1 control arm.
+
+**Closed the resolver gap M2 left.** `validation/chunk_resolver.py` turns an
+exported play's stored chunk ids back into chunks, with two backends whose
+difference is the metadata boundary itself:
+
+| | JSONL backend | Chroma backend |
+|---|---|---|
+| availability | always | needs a built index |
+| provenance (spans) | yes | yes |
+| Tier-2 (`iambic_score`, `syllable_count`) | **no** | yes |
+| cost | one streaming pass | key lookup, embeds nothing |
+
+Verified on a real 07-08 artifact in `data/output/`: JSONL gave `PASS, 3 quotes
+checked` with meter reported as *3 unmeasured*; Chroma gave the same integrity
+result plus `0.53 mean iambic_score, 10.67 syllables`. Same play, same verdict,
+different amount of it measurable — which is exactly the distinction the
+scorecard is built to keep visible.
+
+**The rule that makes the suite worth running: unmeasured is not zero.** Every
+metric that reads chunk metadata reports how many quotes it could measure and
+returns `None`, not `0.0`, when that count is zero. A threshold whose metric came
+back unmeasured is a **failure**, not a pass. That single rule is what would have
+caught the original placeholder, and it is what catches a silently-empty pool or
+a Tier-2 field that stops arriving. Every default scenario sets
+`require_measured_meter`, pinned by a test that fails if a scenario is ever added
+without it.
+
+**First A/B, run against the real 447k index** (`--ab --no-critic`, 8 lines):
+
+| metric | knobs-off (control) | knobs-on |
+|---|---|---|
+| mean `iambic_score` | 0.73 | **0.79** |
+| desired anchor coverage | 25% | **50%** |
+| distinct source plays | 8 | 7 |
+| lines within ±2 of pentameter | 100% | 88% |
+
+**This is not a result.** Eight lines from one scenario is far too small a
+sample, and the diversity and length columns moved the wrong way. It is evidence
+that the ruler reads and that the two arms are genuinely different runs. Getting
+an answer out of it is M4's job, with more scenarios and more lines.
+
+- Full suite green: **237 tests** (178 prior + 59 new).
+- Next steps:
+  - M4 (first quality runs and tuning) — but see the blocker below first.
+  - Consider promoting "unmeasured is not zero" to REVIEW-NOTES.md; it is now the
+    third time this codebase has produced a silent-default bug.
+
+- Risks/notes:
+  - Branch: `claude-eval-harness`, cut from `main` @ `db6ef62`.
+  - **BLOCKER FOR M4: an act with more than one scene cannot be planned at all.**
+    `plan_anchors` attaches an obligation to the first beat of each *act*, while
+    `validate_play_plan` requires *every* beat to carry one, so
+    `expand_play_input` raises `PlanInvalidError: Beat act1_scene2_beat1 missing
+    anchor obligations`. Confirmed by probe: 1 act × 1 scene passes, 2 acts × 1
+    scene each passes, **any act with 2 scenes fails**. Every existing test used
+    a single scene, so this has never surfaced. M4 wants a full five-act play and
+    will hit it immediately.
+    Note the validator disagrees with its own docstring:
+    `_ensure_non_empty_beats` is documented as "every scene includes *at least
+    one* beat with obligations" but implemented as "every beat must have one".
+    Fixing it needs a decision that belongs to the expander, not to M3 — should
+    later beats in an act re-require the primary anchor (which interacts with the
+    reuse lock), or should the validator match its docstring? M3's scenarios work
+    around it with 2 acts × 1 scene rather than pre-empting that call.
+  - `emotion_valence` remains degenerate (89% zeros) and `emotion_alignment` stays
+    at 0.0, so the scorecard deliberately has no emotion metric. Adding one would
+    report a number with no signal behind it. Revisit with M7.
+  - The critic is **off by default** in the suite (`--critic` to enable): every
+    checkpoint is a paid Anthropic call, and the suite is meant to be run often.
+  - `data/chroma`, `data/processed`, `data/output` and `data/eval` are now
+    gitignored. They were untracked but not ignored — one `git add -A` away from
+    committing 7.5 GB.
+  - Scenario variety is limited by the expander, not by the harness:
+    `expander.py:33` hardcodes `rhetorical_mode = "reflection"` and emits one beat
+    per scene, so the two default scenarios differ mainly in anchor vocabulary.
+    Same root cause as the M1 note about per-beat knob modulation.
+

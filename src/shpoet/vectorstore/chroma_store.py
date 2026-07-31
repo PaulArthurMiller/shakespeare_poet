@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import chromadb
 
@@ -151,6 +151,25 @@ class ChromaStore:
         )
         logger.info("Query returned %s results", len(results.get("ids", [[]])[0]))
         return results
+
+    def get_by_ids(self, chunk_ids: Sequence[str]) -> Dict[str, Any]:
+        """Fetch stored documents and metadata for specific chunk ids.
+
+        Unlike ``query``, this embeds nothing: it is a direct key lookup, so it
+        costs no API calls.  That is what makes it usable for resolving a
+        previously-exported play's chunk ids back into chunks, where the only
+        thing wanted is the provenance and Tier-2 metadata already on disk.
+
+        Ids that are not in this collection are simply absent from the result;
+        callers must not assume the returned rows line up with the ids they
+        asked for.
+        """
+
+        if not chunk_ids:
+            return {"ids": [], "documents": [], "metadatas": []}
+        return self._collection.get(
+            ids=list(chunk_ids), include=["documents", "metadatas"]
+        )
 
     def embedding_dimension(self) -> Optional[int]:
         """Return the dimensionality of the stored vectors, if any exist.

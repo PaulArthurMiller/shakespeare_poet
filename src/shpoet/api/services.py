@@ -5,21 +5,21 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from shpoet.common.types import PlayPlan, UserPlayInput
+from shpoet.common.types import CriticReport, PlayPlan, UserPlayInput
 from shpoet.expander.expander import expand_play_input
 from shpoet.llm.chooser import Chooser
 from shpoet.llm.critic import Critic
-from shpoet.macro.guidance import GuidanceEmitter
+from shpoet.macro.guidance import GuidanceEmitter, GuidanceKnobs
 from shpoet.micro.candidate_pool import CandidatePool
 from shpoet.micro.corpus_store import CorpusStore
 from shpoet.micro.reuse_lock import ReuseLock
 from shpoet.scoring.features_for_scoring import compute_anchor_hits
-from shpoet.search.beam_search import BeamSearch
+from shpoet.search.beam_search import BeamSearch, SearchResult
 from shpoet.validation.quote_integrity import IntegrityReport, check_used_chunks
 
 from shpoet.api.models import GenerationConfig
@@ -39,6 +39,46 @@ class GeneratedBeat:
 
 
 @dataclass(frozen=True)
+class BeatSearchStats:
+    """How hard the search worked to produce one beat.
+
+    Kept separate from ``GeneratedBeat`` because it says nothing about the verse
+    and everything about the process: a beat can look fine while the search
+    thrashed through dozens of dead ends and two rollbacks to reach it. That is
+    the signal M4 needs when watching for corpus exhaustion in later acts, and
+    it is invisible in the finished play.
+    """
+
+    beat_id: str
+    pool_size: int
+    lines_produced: int
+    dead_ends: int
+    rollbacks: int
+    checkpoints: int
+    depth_reached: int
+    exhausted: bool
+    # True when the beat produced nothing until its required anchors were dropped.
+    relaxed_anchors: bool
+    critic_reports: List[CriticReport]
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a JSON-serializable form for the exported play."""
+
+        return {
+            "beat_id": self.beat_id,
+            "pool_size": self.pool_size,
+            "lines_produced": self.lines_produced,
+            "dead_ends": self.dead_ends,
+            "rollbacks": self.rollbacks,
+            "checkpoints": self.checkpoints,
+            "depth_reached": self.depth_reached,
+            "exhausted": self.exhausted,
+            "relaxed_anchors": self.relaxed_anchors,
+            "critic_scores": [report.score for report in self.critic_reports],
+        }
+
+
+@dataclass(frozen=True)
 class GeneratedPlay:
     """Generated play output artifacts."""
 
@@ -47,6 +87,11 @@ class GeneratedPlay:
     markdown: str
     play_json: Dict[str, object]
     quote_integrity: IntegrityReport
+    beat_stats: List[BeatSearchStats] = field(default_factory=list)
+    # (beat_id, chunk) for every quote the play used, in play order. Carried so
+    # the evaluation harness can score a run without resolving ids back to
+    # chunks -- the generation path already holds them.
+    used_chunks: List[Tuple[str, Dict[str, object]]] = field(default_factory=list)
 
 
 def create_plan(user_input: UserPlayInput, plan_store: PlanStore) -> PlanRecord:
@@ -123,7 +168,7 @@ def generate_play(
     active_critic = critic if config.use_critic else None
     active_chooser = chooser if config.use_chooser else None
 
-    generated = _generate_play_from_plan(
+    generated = generate_play_from_plan(
         plan_record.plan, chunks, config, active_critic, active_chooser, candidate_pool
     )
     job_id = str(uuid.uuid4())
@@ -159,17 +204,35 @@ def generate_play(
     return record
 
 
-def _generate_play_from_plan(
+def generate_play_from_plan(
     plan: PlayPlan,
     chunks: List[Dict[str, object]],
     config: GenerationConfig,
     critic: Optional[Critic] = None,
     chooser: Optional[Chooser] = None,
     candidate_pool: Optional[CandidatePool] = None,
+    knobs: Optional[GuidanceKnobs] = None,
 ) -> GeneratedPlay:
-    """Generate play output for the provided plan using beam search."""
+    """Generate play output for the provided plan using beam search.
 
-    guidance_emitter = GuidanceEmitter(plan.anchors)
+    Public because the evaluation harness (``learning/replay_suite.py``) needs
+    the full ``GeneratedPlay`` -- per-beat search stats and the chunks actually
+    selected -- which ``generate_play`` discards when it flattens the run into a
+    ``GenerationRecord`` for storage.
+
+    Args:
+        plan: The approved plan to realise.
+        chunks: Full-corpus fallback candidates, ignored when candidate_pool is set.
+        config: Beam width, length, checkpoint interval.
+        critic: Optional LLM critic, called at checkpoints.
+        chooser: Optional LLM chooser.
+        candidate_pool: Per-beat semantic retrieval; the only path carrying
+            Tier-2 metadata into scoring.
+        knobs: Artistic knob settings. Defaults to the configured values; pass
+            ``GuidanceKnobs.all_off()`` for the control arm of an A/B run.
+    """
+
+    guidance_emitter = GuidanceEmitter(plan.anchors, knobs=knobs)
     # One lock for the whole play: it holds the source word spans already
     # quoted, so a later beat cannot re-quote words an earlier beat spent --
     # whichever chunker produced the overlapping candidate.
@@ -177,6 +240,7 @@ def _generate_play_from_plan(
     used_chunks: List[Tuple[str, Dict[str, object]]] = []
     anchors_seen: List[str] = []
     beat_outputs: List[GeneratedBeat] = []
+    beat_stats: List[BeatSearchStats] = []
     output_lines: List[str] = []
 
     for act in plan.acts:
@@ -205,6 +269,22 @@ def _generate_play_from_plan(
                     beat_outputs.append(
                         GeneratedBeat(beat_id=beat.beat_id, line_ids=[], lines=[])
                     )
+                    # An empty pool is still a run event worth measuring: it is
+                    # what corpus exhaustion looks like from the outside.
+                    beat_stats.append(
+                        BeatSearchStats(
+                            beat_id=beat.beat_id,
+                            pool_size=0,
+                            lines_produced=0,
+                            dead_ends=0,
+                            rollbacks=0,
+                            checkpoints=0,
+                            depth_reached=0,
+                            exhausted=True,
+                            relaxed_anchors=False,
+                            critic_reports=[],
+                        )
+                    )
                     continue
                 search = BeamSearch(available_chunks)
                 result = search.run(
@@ -216,11 +296,14 @@ def _generate_play_from_plan(
                     critic=critic,
                     chooser=chooser,
                 )
+                first_attempt = result
+                relaxed_anchors = False
                 if not result.best_path:
                     logger.warning(
                         "No candidates found for beat %s; retrying without required anchors",
                         beat.beat_id,
                     )
+                    relaxed_anchors = True
                     relaxed_constraints = dict(guidance.constraints)
                     relaxed_constraints["required_anchor_count"] = 0.0
                     relaxed_guidance = guidance.model_copy(update={"constraints": relaxed_constraints})
@@ -246,6 +329,15 @@ def _generate_play_from_plan(
                 beat_outputs.append(
                     GeneratedBeat(beat_id=beat.beat_id, line_ids=beat_line_ids, lines=beat_lines)
                 )
+                beat_stats.append(
+                    _beat_stats_for(
+                        beat.beat_id,
+                        len(available_chunks),
+                        len(beat_lines),
+                        first_attempt,
+                        result if relaxed_anchors else None,
+                    )
+                )
 
     # Independent check on the finished artifact: the search believed every one
     # of these was legal, and this is what catches it when that belief is wrong.
@@ -260,12 +352,52 @@ def _generate_play_from_plan(
     markdown = _render_markdown(plan, beat_outputs)
     play_json = _render_play_json(plan, beat_outputs)
     play_json["quote_integrity"] = integrity.to_dict()
+    # Carried on the export so a play can be diagnosed later without the run
+    # that produced it -- search health is not recoverable from the verse.
+    play_json["search_health"] = [stats.to_dict() for stats in beat_stats]
     return GeneratedPlay(
         output_lines=output_lines,
         beat_outputs=beat_outputs,
         markdown=markdown,
         play_json=play_json,
         quote_integrity=integrity,
+        beat_stats=beat_stats,
+        used_chunks=used_chunks,
+    )
+
+
+def _beat_stats_for(
+    beat_id: str,
+    pool_size: int,
+    lines_produced: int,
+    first_attempt: "SearchResult",
+    relaxed_attempt: Optional["SearchResult"],
+) -> BeatSearchStats:
+    """Fold one or two search attempts for a beat into a single stats record.
+
+    A beat that had to drop its required anchors ran the search twice. Both
+    attempts cost real work, so their counters are summed rather than the first
+    attempt being discarded -- otherwise the beats that struggled most would
+    look like the cheapest ones.
+    """
+
+    attempts = [first_attempt] + ([relaxed_attempt] if relaxed_attempt is not None else [])
+    final = attempts[-1]
+    critic_reports: List[CriticReport] = []
+    for attempt in attempts:
+        critic_reports.extend(attempt.critic_reports)
+
+    return BeatSearchStats(
+        beat_id=beat_id,
+        pool_size=pool_size,
+        lines_produced=lines_produced,
+        dead_ends=sum(attempt.dead_ends for attempt in attempts),
+        rollbacks=sum(attempt.rollbacks for attempt in attempts),
+        checkpoints=sum(attempt.checkpoints_used for attempt in attempts),
+        depth_reached=final.depth_reached,
+        exhausted=final.exhausted,
+        relaxed_anchors=relaxed_attempt is not None,
+        critic_reports=critic_reports,
     )
 
 

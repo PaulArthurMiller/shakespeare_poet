@@ -44,3 +44,54 @@ case": (1) zero "skipped before headers" warnings, and (2) zero duplicate
 `line_id` values across the whole corpus. Both invariants caught bugs here
 that a narrow regression test alone would have missed — the Twelfth
 Night bug produces no warning at all, only a silent collision.
+
+## build session — 2026-07-31 (M3, evaluation harness)
+
+**Problem:** The replay suite's `run_scenario()` returned `passed=True`
+unconditionally with a logged warning. It had done so since Milestone 10 in
+January. Nothing was broken, no test failed, and the suite had been run and
+reported green — which is worse than having no suite, because a green check
+consumes the attention a real check would have earned.
+
+**Root cause:** A placeholder written with a truthful log line
+(`"uses placeholder checks"`) but an untruthful *return value*. Logs are read
+by whoever is watching at the time; return values are read by everything
+downstream, forever. The two diverged and the return value won.
+
+**Pattern — this codebase fails by returning a plausible default.** Four
+instances now, all the same shape:
+- missing metadata key → `float(chunk.get("iambic_score", 0.0))` → 0.0
+- embedding dimension mismatch → exception per collection → empty pool → a
+  play generated with no candidates, job status `completed`
+- absent provenance → chunk not span-locked → reuse rule silently weakened
+- placeholder check → `passed=True`
+
+In every case the default is *in range*. 0.0 is a legal iambic score, an empty
+pool is a legal pool, `True` is a legal verdict. Nothing downstream can tell
+the default from a measurement, which is what makes these survive so long.
+
+**Prevention — make "unmeasured" a distinct value from "zero", and make it
+propagate.** M3's metrics never return `0.0` for something they did not
+measure; they return `None` and carry a `measured`/`unmeasured` count beside
+every average. The rule that gives this teeth is at the threshold layer: *a
+threshold whose metric came back unmeasured is a failure, not a pass.* An
+assertion that could not be evaluated has not been satisfied. Without that
+second half, `None` just becomes the new silent default.
+
+The same idea, applied at the layer below, is what the M2 work called
+`unverifiable_count`: quotes whose provenance is absent are neither passes nor
+failures, they are unchecked, and the count says how much of the verdict is
+real.
+
+**Trigger:** Any `.get(key, <default>)` where the default is a legal value of
+the field, any `except: return <success>`, and any function whose docstring
+says "placeholder". Ask: if this key vanished from the data tomorrow, what
+would the caller see — an error, or a number?
+
+**Corollary found the same session:** `chromadb.PersistentClient(path=...)`
+plus `get_or_create_collection` *creates* a directory and empty collections
+rather than failing on a path that holds no index. Opening a typo'd path
+therefore succeeded and produced a resolver that found nothing, reporting every
+quote in the play as unverifiable. Guarding constructors that create-on-open is
+the same class of fix: refuse the empty case explicitly, because the library's
+"helpful" default is indistinguishable from success.
