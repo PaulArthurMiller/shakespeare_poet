@@ -156,22 +156,49 @@ class ChromaChunkResolver:
         persist_dir: Path,
         collection_names: Sequence[str] = DEFAULT_COLLECTIONS,
     ) -> None:
-        """Open the collections that will be searched for each id."""
+        """Open the collections that will be searched for each id.
+
+        Raises:
+            FileNotFoundError: if the directory does not exist, or holds no
+                collection with anything in it.
+        """
+
+        # Checked before touching chromadb because PersistentClient *creates*
+        # the directory, and get_or_create_collection creates empty collections
+        # inside it. Opening a path that does not exist would therefore succeed,
+        # hand back a resolver that can resolve nothing, and report every quote
+        # in the play as unverifiable -- a silent wrong answer where an error
+        # belongs.
+        if not persist_dir.exists():
+            raise FileNotFoundError(
+                f"No Chroma index directory at {persist_dir}. "
+                f"Run `python -m shpoet.scripts.build_index` first, or use "
+                f"JsonlChunkResolver against the processed corpus instead."
+            )
 
         self._persist_dir = persist_dir
         self._stores: Dict[str, ChromaStore] = {}
         for name in collection_names:
             try:
-                self._stores[name] = ChromaStore(persist_dir, collection_name=name)
+                store = ChromaStore(persist_dir, collection_name=name)
             except Exception as exc:  # noqa: BLE001 - surfaced with context below
                 logger.warning(
                     "Could not open collection '%s' in %s (%s); continuing without it",
                     name, persist_dir, exc,
                 )
+                continue
+
+            # An empty collection is indistinguishable from a missing one for
+            # resolution purposes, and keeping it would mask the difference.
+            if store.count() == 0:
+                logger.debug("Collection '%s' in %s is empty; skipping", name, persist_dir)
+                store.close()
+                continue
+            self._stores[name] = store
 
         if not self._stores:
             raise FileNotFoundError(
-                f"No usable Chroma collections found in {persist_dir}. "
+                f"No populated Chroma collections found in {persist_dir}. "
                 f"Run `python -m shpoet.scripts.build_index` first, or use "
                 f"JsonlChunkResolver against the processed corpus instead."
             )
