@@ -84,9 +84,8 @@ def _beat(beat_id: str = "act1_scene1_beat1") -> BeatPlan:
     )
 
 
-@pytest.fixture()
-def indexed_dir() -> Iterator[Path]:
-    """Build a small single-collection Chroma index and yield its directory."""
+def _index_chunks(chunks: List[dict]) -> Iterator[Path]:
+    """Build a single-collection Chroma index over the given chunks."""
 
     tmpdir = Path(mkdtemp())
     persist_dir = tmpdir / "chroma"
@@ -94,7 +93,7 @@ def indexed_dir() -> Iterator[Path]:
     try:
         # apply_tier2=False keeps the fixture fast; Tier-2 round-tripping is
         # covered separately in test_pool_preserves_tier2_metadata.
-        store.build_index(_CHUNKS, embedding_dimensions=8, apply_tier2=False)
+        store.build_index(chunks, embedding_dimensions=8, apply_tier2=False)
     finally:
         store.close()
         gc.collect()
@@ -107,6 +106,56 @@ def indexed_dir() -> Iterator[Path]:
         except PermissionError:
             if not sys.platform.startswith("win"):
                 raise
+
+
+@pytest.fixture()
+def indexed_dir() -> Iterator[Path]:
+    """Build a small single-collection Chroma index and yield its directory."""
+
+    yield from _index_chunks(_CHUNKS)
+
+
+@pytest.fixture()
+def duplicate_text_dir() -> Iterator[Path]:
+    """Index a line alongside a phrase whose words are identical to it.
+
+    This is what the three collections actually produce: a full line and the
+    single phrase covering it differ only by trailing punctuation and case.
+    """
+
+    chunks = [
+        {
+            "chunk_id": "line_9",
+            "text": "The rest is silence.",
+            "line_id": "line_9",
+            "play": "Hamlet",
+            "act": 5,
+            "scene": 2,
+            "start_word_idx": 0,
+            "end_word_idx": 3,
+        },
+        {
+            "chunk_id": "line_9_p0",
+            "text": "the rest is silence",
+            "line_id": "line_9",
+            "play": "Hamlet",
+            "act": 5,
+            "scene": 2,
+            "start_word_idx": 0,
+            "end_word_idx": 3,
+        },
+        {
+            "chunk_id": "line_10",
+            "text": "Now is the winter of our discontent",
+            "line_id": "line_10",
+            "play": "Richard III",
+            "act": 1,
+            "scene": 1,
+            "start_word_idx": 0,
+            "end_word_idx": 6,
+        },
+    ]
+    yield from _index_chunks(chunks)
 
 
 class TestBuildBeatQuery:
@@ -299,6 +348,27 @@ class TestCandidatePool:
 
         assert result.size == 0
         assert result.chunks == []
+
+    def test_collapses_chunks_with_identical_words(self, duplicate_text_dir: Path) -> None:
+        """A line and the phrase covering it must not both take a pool slot."""
+
+        pool = CandidatePool(
+            duplicate_text_dir,
+            collection_names=["shpoet_lines"],
+            embedding_dimensions=8,
+            pool_size=10,
+        )
+        try:
+            result = pool.for_beat(_beat(), [])
+        finally:
+            pool.close()
+            gc.collect()
+
+        texts = [normalize_for_dedupe(str(chunk["text"])) for chunk in result.chunks]
+        assert texts.count("the rest is silence") == 1
+        assert result.duplicates == 1
+        # The distinct line is untouched -- dedupe must not collapse real variety.
+        assert any("winter" in text for text in texts)
 
     def test_missing_index_raises(self, tmp_path: Path) -> None:
         """A directory with no collections must fail loudly at construction."""
