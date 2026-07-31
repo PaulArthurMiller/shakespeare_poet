@@ -135,7 +135,7 @@ class GenerationInputs:
 
 
 def _mirror_soliloquy_input() -> UserPlayInput:
-    """The reference scenario: one speaker, two reflective beats.
+    """The reference scenario: one speaker, two reflective beats, one act.
 
     Deliberately narrow. A scenario that varies many things at once cannot
     attribute a regression to any of them, and this one exercises the whole
@@ -143,12 +143,16 @@ def _mirror_soliloquy_input() -> UserPlayInput:
     across two beats, which is the minimum that proves the play-level reuse lock
     carries between beats rather than resetting.
 
-    The two beats are in two *acts*, one scene each, and that is a workaround
-    rather than a design choice.  ``plan_anchors`` attaches an obligation to the
-    first beat of each act while ``validate_play_plan`` requires *every* beat to
-    carry one, so any act with more than one scene fails planning outright.  See
-    PROGRESS.md 2026-07-31 -- it blocks M4's five-act runs and needs a decision
-    about where anchors belong before it can be fixed.
+    The two beats are two *scenes* in one act -- previously the exact shape that
+    could not be planned at all. ``plan_anchors`` used to attach an obligation to
+    only the first beat of each *act* while ``validate_play_plan`` required
+    *every* beat to carry one, so any act with more than one scene failed
+    planning outright. Fixed in M4 (see PROGRESS.md 2026-07-31): anchor
+    obligations now attach per *scene*, and the validator matches its own
+    docstring -- only one beat per scene needs to carry the obligation, which
+    is also what makes ``SceneInput.beat_count`` > 1 possible. Using the
+    multi-scene shape here, rather than the old two-act workaround, is what
+    proves the fix rather than sidestepping it.
     """
 
     return UserPlayInput(
@@ -173,8 +177,8 @@ def _mirror_soliloquy_input() -> UserPlayInput:
                 participants=["Cassia"],
             ),
             SceneInput(
-                act=2,
-                scene=1,
+                act=1,
+                scene=2,
                 setting="The same hall, one candle fewer.",
                 summary="Cassia weighs the crown against the oath that bought it.",
                 participants=["Cassia"],
