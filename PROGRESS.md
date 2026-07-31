@@ -497,3 +497,84 @@ does anything, and ~290 candidates per beat is ample for beam search.
     also a real limit on M4's tuning surface and probably deserves its own
     milestone.
 
+## 2026-07-31 09:20 — M2: quote integrity enforced on source spans
+Completes BUILD-PLAN.md Milestone 2. The no-reuse rule — the project's defining
+constraint — was never actually enforced; it is now, at four layers.
+
+**The bug.** `ReuseLock` keyed on `chunk_id`. Three chunkers cut overlapping text
+out of the same corpus, so one Shakespeare line yields a full-line chunk, phrase
+chunks, and fragment chunks, all with different ids and all made of the same
+words. `..._line101`, `..._line101_p0` and `..._line101_f2` are three identities
+for one piece of text. Locking on id therefore permitted exactly the thing it
+existed to prevent, and every prior run "passed" a rule nothing was checking.
+
+- Added `common/spans.py`: `SourceSpan` (`line_id` + inclusive word range — the
+  triple every chunker already writes via `chunking/provenance.py`) and
+  `span_from_chunk()`, which returns `None` rather than guessing when provenance
+  is absent. Callers must treat `None` as *unverifiable*, never as *safe*.
+- `ReuseLock` now marks and tests chunk **dicts**. Marking any chunk locks every
+  overlapping span on that source line. Ids are kept as the cheap first check and
+  as the only identity available for provenance-less chunks, which are counted
+  separately (`unverifiable_count`) so degraded locking is visible.
+- `CandidatePool.for_beat()` takes the play-level lock in place of `exclude_ids`
+  and dedupes on normalized text (tokenized with the indexer's own tokenizer, so
+  the rule cannot drift from how `tokens` was derived at index time).
+- `api/services.generate_play` holds **one lock for the whole play**. The old
+  per-beat `used_ids` set was the cross-beat leak: beat 5 could re-quote words
+  beat 1 had spent, under a different chunk id.
+- Added `validation/quote_integrity.py`: an independent post-generation check on
+  the finished artifact, reporting violations, quotes checked, **and quotes that
+  could not be checked**. Stored on `GenerationRecord` (new `quote_integrity`
+  column, with an explicit `ALTER TABLE` migration — `CREATE TABLE IF NOT EXISTS`
+  does nothing to a pre-existing database) and embedded in the exported play JSON.
+
+**Adjacency is not overlap.** `0–3` and `4–7` on one line quote different words
+and both stay legal. Getting this wrong would have deleted most of the usable
+phrase corpus for a rule that never asked for it, so it is pinned by test.
+
+**Measured against the real 447k index** (query: "A ruler confronts a mirror that
+remembers every broken oath", pool_size 800):
+
+| | |
+|---|---|
+| retrieved across 3 collections | 1,596 |
+| duplicate texts collapsed | **392 (24.6%)** |
+| final pool | 800, all with usable spans (0 unverifiable) |
+| distinct source lines represented | 628 |
+| pool members overlapping an earlier member | 171 |
+| candidates excluded after 30 chunks consumed | 72 (≈2.4 per chunk spent) |
+
+Two things worth keeping: a quarter of the retrieval budget was being spent on
+chunks that were the same words as another chunk in the pool, and provenance
+survives the full chunk → index → query → rehydrate round trip intact, which is
+what makes the span rule enforceable at runtime at all. The 171 overlapping
+members are *alternatives* — legal to hold in the pool, and it is the lock's job,
+not the pool's, to ensure only one is ever selected.
+
+**Corpus-exhaustion risk (BUILD-PLAN M2) measured, and it is mild.** Span locking
+costs ~2.4 candidates per chunk consumed, against 1.0 for id locking. At 800
+candidates per beat that is not close to starving the pool; revisit only if
+rollback counts climb in later acts during M4.
+
+- **Open question resolved:** a sonnet line and a play line that happen to share
+  text have different `line_id`s, so quoting both is **not** reuse. They are
+  distinct places in the canon and the span rule is right to allow it. Pinned by
+  `test_same_indices_on_different_lines_do_not_overlap`.
+- Full suite green: 178 tests (145 prior + 33 new).
+- Next steps:
+  - M3 (real evaluation harness): `learning/replay_suite.py` still returns
+    `passed=True` unconditionally. Quote-integrity violation counts are now a
+    real metric it can assert on.
+- Risks/notes:
+  - Branch: `claude-quote-integrity`, cut from `main` @ `bebb33a`.
+  - `ReuseLock.mark_used()` takes a chunk dict, not an id — an id alone cannot
+    say which source words a line spent. `mark_id_used()` exists for callers that
+    genuinely hold only ids (a persisted generation record), and every use of it
+    increments `unverifiable_count`.
+  - A play that fails integrity is **recorded and logged, not raised**. The play
+    is still worth reading, and the violations name exactly which spans clash.
+    M3's harness should treat a non-zero violation count as a hard failure.
+  - Validating a previously-exported play in `data/output/` needs its stored
+    chunk ids resolved back to chunks first; `check_quote_integrity()` accepts
+    the resulting usages, but no resolver is written yet.
+
