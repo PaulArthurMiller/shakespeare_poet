@@ -600,14 +600,24 @@ SHPOET_OUTPUT_DIR            data/output
 
 - **M1 — Turn on the artistic knobs:** complete (PR #25, merged).
 - **M2 — Quote integrity:** complete (PR #26, merged).
-- **M3 — Real evaluation harness:** complete (branch `claude-eval-harness`).
-- **Current milestone:** 4 — First quality runs and tuning (not started)
+- **M3 — Real evaluation harness:** complete (PR #27, merged).
+- **Current milestone:** 4 — First quality runs and tuning (planning blocker
+  resolved; real tuning runs not started)
 - **Last updated:** 2026-07-31
 
-> ⚠ **M4 is blocked on a planning bug found during M3.** An act with more than
-> one scene cannot be planned: `plan_anchors` attaches an obligation to the first
-> beat of each *act*, `validate_play_plan` requires *every* beat to carry one, so
-> `expand_play_input` raises `PlanInvalidError`. A five-act play will hit this
-> immediately. Fixing it needs a decision about where anchors belong — see
-> PROGRESS.md 2026-07-31 16:40. M3's scenarios work around it with one scene per
-> act.
+> ✅ **The planning blocker is fixed** (branch `milestone-4-multi-beat-planning`).
+> Anchor obligations now attach to the first beat of every *scene* (was: first
+> beat of every *act*), and `_ensure_non_empty_beats` was fixed to match its own
+> docstring — one obligation-bearing beat per scene is sufficient, not every
+> beat. An act with any number of scenes now plans correctly. `SceneInput` also
+> gained `beat_count` (default 1, minimum 1), so a scene can expand to several
+> beats; only the scene's first beat carries the anchor, so later beats don't
+> force repeated anchor text into the reuse lock. Verified against the real
+> 447k-chunk index: a two-scene act and a `beat_count=2` scene both plan and
+> generate cleanly. See PROGRESS.md 2026-07-31 19:23.
+>
+> **Still open, and out of scope for this pass:** the actual M4 work — full
+> 5-act generation with the real critic, `pool_size`/`beam_width`/knob tuning,
+> and the `RhymeConstraint` wire-or-delete decision. Those involve paid
+> Anthropic critic calls across a long run; recommend confirming budget/timing
+> before launching them.

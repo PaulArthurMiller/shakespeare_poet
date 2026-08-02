@@ -24,6 +24,9 @@ class SceneInput(BaseModel):
     setting: str = Field(..., description="Setting description for the scene.")
     summary: str = Field(..., description="High-level intent and situation.")
     participants: List[str] = Field(default_factory=list, description="Character names participating.")
+    beat_count: int = Field(
+        default=1, ge=1, description="Number of beats to expand this scene into."
+    )
 
 
 class UserPlayInput(BaseModel):

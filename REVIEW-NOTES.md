@@ -95,3 +95,41 @@ therefore succeeded and produced a resolver that found nothing, reporting every
 quote in the play as unverifiable. Guarding constructors that create-on-open is
 the same class of fix: refuse the empty case explicitly, because the library's
 "helpful" default is indistinguishable from success.
+
+## build session — 2026-07-31 (M4, planning blocker)
+
+**Problem:** Any act with more than one scene raised `PlanInvalidError`
+outright — not a wrong output, a hard crash before generation started.
+Undetected since Milestone 2 (January) because every scenario, in every test
+and every replay suite entry, happened to use exactly one scene per act.
+
+**Root cause:** `expander/validators.py::_ensure_non_empty_beats` was
+implemented as "every beat in the scene must carry an obligation," while its
+own docstring said "every scene includes *at least one* beat with
+obligations." `anchor_planner.plan_anchors` was written to the docstring's
+looser rule (it only ever placed an obligation on one beat *per act*), so the
+two disagreed the moment an act held a second scene: the second scene's beat
+had no obligation, and the stricter implementation rejected it.
+
+**Pattern — this is the second time in this codebase a docstring and its
+implementation have quietly diverged, and both times the docstring was
+right and the code was wrong.** M1's `meter_strictness` inversion
+(`check_meter_adjacency` computed the opposite of what its own docstring and
+`MeterConstraint`'s described) is the first instance. In both cases: the
+docstring reads as a spec someone wrote deliberately; the code reads as
+plausible at a glance; and no test pinned which one was true, so the mismatch
+shipped and stayed shipped until an input shape exercised it.
+
+**Prevention:** When a docstring makes a specific, checkable claim ("every
+X has at least one Y", "score increases as strictness decreases"), write one
+test that would fail if the *code* were right and the *docstring* were wrong,
+and one that would fail the other way. That test is what forces a human to
+notice the disagreement instead of silently picking a side. Absence of such a
+test is itself a signal worth searching for: grep docstrings for quantifiers
+("every", "at least", "all", "none") and check each one has a test that
+distinguishes it from its plausible-sounding neighbor.
+
+**Trigger:** Reviewing or modifying any function whose docstring states a
+structural invariant in words ("every scene", "at least one", "must not
+exceed") — before trusting the implementation, write the input that would
+tell the two apart.

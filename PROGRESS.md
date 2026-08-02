@@ -682,3 +682,79 @@ an answer out of it is M4's job, with more scenarios and more lines.
     per scene, so the two default scenarios differ mainly in anchor vocabulary.
     Same root cause as the M1 note about per-beat knob modulation.
 
+## 2026-07-31 19:23 — M4 planning blocker fixed: anchors per scene, beats per scene
+
+Unblocks M4. Fixes the bug recorded in the previous entry: an act with more
+than one scene could not be planned at all, and every existing scenario had
+been working around it rather than exercising it. Also adds the feature
+requested for this build: a scene can now expand to more than one beat, with
+one as the floor.
+
+**The fix.** Two independent bugs were compounding:
+
+- `plan_anchors` (`expander/anchor_planner.py`) grouped beat ids by *act* and
+  placed the anchor obligation on only the first beat of each act. Changed to
+  group by *scene* (`expander/expander.py:_map_beats_by_scene`, renamed from
+  `_map_beats_by_act`) and place the obligation on each scene's first beat
+  instead. Every scene now gets exactly one obligation-bearing beat, regardless
+  of how many scenes its act holds.
+- `_ensure_non_empty_beats` (`expander/validators.py`) was implemented as
+  "every beat needs an obligation" while its own docstring said "every scene
+  needs *at least one* beat with obligations." Rewrote it to match the
+  docstring — it now takes the scene id and checks `any(beat.obligations for
+  beat in beats)` instead of requiring every beat to carry one.
+
+Fixing only one of these would not have been enough: with just the first fix,
+the validator would still reject scenes whose second-and-later beats
+(correctly) carry no obligation. The two bugs were pinned together by every
+existing test using exactly one scene per act, so neither ever surfaced until
+M3's audit deliberately built a two-scene-per-act probe.
+
+**New feature: `SceneInput.beat_count`.** Added to `common/types.py`
+(`int`, default 1, `ge=1` — Pydantic enforces the floor, so a scene cannot
+silently expand to zero beats). `expander._build_scene_plan` now builds
+`beat_count` beats instead of always exactly one; beat ids already had room
+for this (`act{N}_scene{N}_beat{index}`) since `index` was never hardcoded to
+1 except at the call site. Only the scene's first beat gets the anchor
+obligation — later beats develop the scene without repeating the same
+required anchor text into the reuse lock, which is the decision the previous
+entry flagged as belonging to the expander. Beats past the first also get a
+distinguishing objective (`"...(beat 2 of 3): ..."`) so multi-beat scenes issue
+different retrieval queries per beat rather than drawing from the same narrow
+slice of the candidate pool `beat_count` times over.
+
+**Verified against the real 447k-chunk index**, not just unit tests:
+- The `mirror-soliloquy` replay scenario was rewritten from its two-act
+  workaround to the natural one-act/two-scene shape the bug used to reject
+  outright, and run with `--no-critic`: plans, generates 8 lines, passes quote
+  integrity (0 violations), `require_measured_meter` satisfied, all thresholds
+  met.
+- An ad hoc scenario with `beat_count=2` on a single scene: both beats
+  generate, `act1_scene1_beat2` carries no obligation as designed, quote
+  integrity passes (4 quotes, 0 violations).
+
+**Not done in this pass.** The rest of M4 — a full 5-act play against the real
+corpus with the critic on, `pool_size`/`beam_width`/knob tuning, and the
+`RhymeConstraint` wire-or-delete call — was intentionally left out. It requires
+a long run with paid Anthropic critic calls per checkpoint, which the build
+skill's cost-confirmation rule applies to; only the planning blocker and the
+requested `beat_count` feature were in scope for this session.
+
+- Full suite green: **244 tests** (237 prior + 7 new in `tests/test_expander.py`).
+- Next steps:
+  - Decide and confirm scope/budget for the real 5-act tuning run, then execute
+    the rest of M4 (tuning order: `pool_size` → `beam_width` → knob weights →
+    `checkpoint_interval`; `RhymeConstraint` decision).
+  - `expander.py:33` still hardcodes `rhetorical_mode = "reflection"` for every
+    beat. Now that scenes can carry multiple beats, this is a sharper limit
+    than before — a 3-beat scene produces 3 beats of identical rhetorical
+    posture. Worth revisiting alongside the M4 tuning pass, not before it.
+- Risks/notes:
+  - Branch: `milestone-4-multi-beat-planning`, cut from `main` @ `eb22686`
+    (which already includes M3's PR #27).
+  - `AnchorPlan.placements` semantics changed silently in meaning (still "beat
+    ids the anchor was placed at," but now one per scene instead of one per
+    act) — nothing else in the codebase reads that field today, confirmed by
+    grep, so this is not a behavior change for any consumer, just noted in case
+    a future feature starts reading it.
+

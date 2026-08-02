@@ -73,9 +73,16 @@ def _unique_ordered(items: List[str]) -> List[str]:
 
 def plan_anchors(
     user_input: UserPlayInput,
-    beat_ids_by_act: Dict[int, List[str]],
+    beat_ids_by_scene: Dict[str, List[str]],
 ) -> Tuple[AnchorRegistry, Dict[str, BeatObligation]]:
-    """Create anchors and beat obligations based on user input and beats."""
+    """Create anchors and beat obligations based on user input and beats.
+
+    Every scene gets exactly one obligation-bearing beat -- its first -- which
+    is what ``validate_play_plan`` requires. A scene may expand to several
+    beats (``SceneInput.beat_count``); only the first is asked to carry the
+    anchor, so later beats are free to develop the scene without repeating the
+    same lexical anchor into the reuse lock.
+    """
 
     candidates = _unique_ordered(_collect_candidates(user_input))
     primary_anchor = candidates[0] if candidates else "fate"
@@ -88,7 +95,7 @@ def plan_anchors(
 
     placements: List[str] = []
     obligations: Dict[str, BeatObligation] = {}
-    for act, beat_ids in beat_ids_by_act.items():
+    for scene_id, beat_ids in beat_ids_by_scene.items():
         if not beat_ids:
             continue
         first_beat = beat_ids[0]
@@ -98,7 +105,7 @@ def plan_anchors(
             required_anchors=[primary_anchor],
             desired_anchors=related_terms[:2],
         )
-        logger.info("Anchor obligation set for act %s beat %s", act, first_beat)
+        logger.info("Anchor obligation set for scene %s beat %s", scene_id, first_beat)
 
     anchor_plan = AnchorPlan(
         anchor_term=primary_anchor,
